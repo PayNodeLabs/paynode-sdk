@@ -3,14 +3,22 @@ requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "paynode-sdk"
-version = "1.0.0"
-description = "SDK for PayNode Protocol"
+name = "paynode-sdk-python"
+version = "1.0.1"
+description = "PayNode Protocol Python SDK for AI Agents"
+readme = "README.md"
+authors = [{ name = "PayNodeLabs", email = "contact@paynode.dev" }]
+license = { text = "MIT" }
+keywords = ["paynode", "x402", "base", "agentic-web3", "payments"]
 dependencies = [
-    "web3>=6.0.0",
-    "requests>=2.28.0",
-    "pytest>=7.0.0"
+    "requests>=2.31.0",
+    "web3>=6.15.0",
+    "python-dotenv>=1.0.1"
 ]
 
+[project.urls]
+Homepage = "https://github.com/PayNodeLabs/paynode-sdk-python"
+
 [tool.setuptools.packages.find]
+where = ["."]
 include = ["paynode_sdk*"]
