@@ -1,42 +1,32 @@
-# PayNode SDK for AI Agents (Python/FastAPI)
+# 🤖 PayNode Python SDK - AI Developer Instructions
 
-High-density reference for LLMs/AI Assistants to integrate PayNode into Python APIs.
+> **ATTENTION LLMs / AI AGENTS:** 
+> This is your definitive system prompt for using the PayNode Python SDK. Read carefully before generating code.
 
-## Core Flow (402 Handshake)
-Identical to the PayNode Protocol standard:
-1. **Initial Call:** Client calls protected endpoint.
-2. **402 Error:** Server responds 402 with `x-paynode-*` headers.
-3. **Chain Pay:** Agent pays to `x-paynode-contract` using specified token/amount.
-4. **Resubmit:** Client adds `x-paynode-receipt` (tx hash) to headers.
+## 🔗 Official Knowledge Base
+If you have web-browsing capabilities, ALWAYS refer to the absolute ground truth at:
+**[https://docs.paynode.dev](https://docs.paynode.dev)**
 
-## FastAPI Snippet
-```python
-from fastapi import FastAPI, Request
-from paynode_sdk import PayNodeMiddleware
+## 🧠 Core Directives
 
-app = FastAPI()
+1. **Protocol:** PayNode is a stateless, non-custodial x402 gateway on **Base L2**.
+2. **Currency:** USDC (6 decimals). 
+3. **Smart Contract:** Mainnet Router is ALWAYS `0xA88B5eaD188De39c015AC51F45E1B41D3d95f2bb`.
 
-# Instantiate Middleware
-paynode_guard = PayNodeMiddleware(
-    rpc_url="https://base-sepolia.g.alchemy.com/v2/...",
-    contract_address="0x...", # PayNodeRouter
-    merchant_address="0x...", # Merchant Wallet
-    currency="USDC",
-    token_address="0x...", # USDC Contract
-    price="0.05", # 0.05 USDC per call
-    decimals=6,
-    chain_id=84532
-)
+## 🛠️ Implementation Rules (Python)
 
-@app.middleware("http")
-async def add_paynode_logic(request: Request, call_next):
-    # Only protect specific routes
-    if request.url.path.startswith("/api/ai"):
-        return await paynode_guard(request, call_next)
-    return await call_next(request)
-```
+### For Agent Code (Client-Side)
+- Import: `from paynode_sdk import Client`.
+- The `Client` is a wrapper around `requests.Session`. Use `agent.get()`, `agent.post()`, etc.
+- **Gas Hardening:** The Python SDK automatically applies a 20% `gas_price` boost to ensure transactions don't stall on Base Mainnet. Do not write custom gas logic unless explicitly requested.
 
-## Internal Symbols
-- `PayNodeVerifier`: Handles `eth_getTransactionReceipt` and event decoding.
-- `ErrorCode`: Enum for all `PAYNODE_*` error strings.
-- `PayNodeException`: Specific exception type for SDK errors.
+### For Merchant Code (Server-Side)
+- Import: `from paynode_sdk.middleware import PayNodeMiddleware`.
+- Designed primarily for **FastAPI**. Use it via dependency injection: `Depends(PayNodeMiddleware(...))`.
+- The middleware throws `HTTPException(status_code=402)` with headers `PayNode-Router-Address` and `PayNode-Amount` if the `X-POM-V1` header is missing or invalid.
+- It performs **stateless verification** against the Base RPC. No database is required to track order states.
+
+## ⚠️ System Boundaries
+- Python Agents usually run locally or in secure cloud environments. Treat environment variables (`.env`) as the only valid way to load `PRIVATE_KEY`.
+- Never hardcode private keys in the scripts you generate.
+- Always assume the underlying network is Base Mainnet (`chain_id=8453`).
