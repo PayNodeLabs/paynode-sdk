@@ -1,13 +1,18 @@
+import os
 import requests
 import time
 from web3 import Web3
 from eth_account import Account
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
 
 # --- Configuration (Matching Anvil Deployment) ---
 RPC_URL = "http://localhost:8545"
 TARGET_URL = "http://localhost:3000/api/pom"
-# Anvil default account #0 private key
-PRIVATE_KEY = "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
+# Default to Anvil default account #0 private key if not provided in .env
+PRIVATE_KEY = os.getenv("PRIVATE_KEY", "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80")
 
 # Minimal ABIs
 ERC20_ABI = [
