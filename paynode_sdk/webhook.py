@@ -18,7 +18,7 @@ import asyncio
 from typing import Optional, Callable, Dict, Any, List
 from web3 import Web3
 
-from .constants import PAYNODE_ROUTER_ABI
+from .constants import PAYNODE_ROUTER_ABI, PAYNODE_ROUTER_ADDRESS
 from .errors import PayNodeException, ErrorCode
 
 logger = logging.getLogger("paynode_sdk.webhook")
@@ -73,7 +73,7 @@ class PayNodeWebhookNotifier:
     Usage:
         notifier = PayNodeWebhookNotifier(
             rpc_url="https://mainnet.base.org",
-            contract_address="0xA88B5eaD188De39c015AC51F45E1B41D3d95f2bb",
+            contract_address="0x92e20164FC457a2aC35f53D06268168e6352b200",
             webhook_url="https://myshop.com/api/paynode-webhook",
             webhook_secret="whsec_mysecretkey123",
         )
@@ -83,9 +83,9 @@ class PayNodeWebhookNotifier:
     def __init__(
         self,
         rpc_url: str,
-        contract_address: str,
         webhook_url: str,
         webhook_secret: str,
+        contract_address: Optional[str] = None,
         chain_id: Optional[int] = None,
         poll_interval_seconds: float = 5.0,
         custom_headers: Optional[Dict[str, str]] = None,
@@ -94,19 +94,17 @@ class PayNodeWebhookNotifier:
     ):
         if not rpc_url:
             raise ValueError("rpc_url is required")
-        if not contract_address:
-            raise ValueError("contract_address is required")
         if not webhook_url:
             raise ValueError("webhook_url is required")
         if not webhook_secret:
             raise ValueError("webhook_secret is required")
 
+        self.contract_address = contract_address or PAYNODE_ROUTER_ADDRESS
         self.w3 = Web3(Web3.HTTPProvider(rpc_url, request_kwargs={"timeout": 10}))
         self.contract = self.w3.eth.contract(
-            address=Web3.to_checksum_address(contract_address),
+            address=Web3.to_checksum_address(self.contract_address),
             abi=PAYNODE_ROUTER_ABI
         )
-        self.contract_address = contract_address
         self.webhook_url = webhook_url
         self.webhook_secret = webhook_secret
         self.chain_id = chain_id
