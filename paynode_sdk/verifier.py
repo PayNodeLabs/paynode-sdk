@@ -1,5 +1,5 @@
 from .errors import ErrorCode, PayNodeException
-from .constants import PAYNODE_ROUTER_ABI, ACCEPTED_TOKENS
+from .constants import PAYNODE_ROUTER_ABI, ACCEPTED_TOKENS, MIN_PAYMENT_AMOUNT
 from .idempotency import MemoryIdempotencyStore
 from web3 import Web3
 
@@ -26,7 +26,15 @@ class PayNodeVerifier:
         if not self.w3:
             return {"isValid": False, "error": PayNodeException("Verifier Provider Missing", ErrorCode.RPC_ERROR)}
 
-        # 0. Token Whitelist Check (Anti-FakeToken)
+        # 0. Dust Exploit Check (Minimum Payment)
+        amount = int(expected.get("amount", 0))
+        if amount < MIN_PAYMENT_AMOUNT:
+             return {"isValid": False, "error": PayNodeException(
+                f"Payment amount {amount} is below the minimum threshold of {MIN_PAYMENT_AMOUNT}.",
+                ErrorCode.AMOUNT_TOO_LOW
+            )}
+
+        # 1. Token Whitelist Check (Anti-FakeToken)
         expected_token = expected.get("tokenAddress", "").lower()
         if self.accepted_tokens and expected_token not in self.accepted_tokens:
             return {"isValid": False, "error": PayNodeException(
