@@ -171,7 +171,7 @@ class PayNodeAgentClient:
     def pay_with_permit_auto(self, router_addr, token_addr, merchant_addr, amount, order_id):
         """Combines sign_permit and on-chain submission."""
         sig = self.sign_permit(token_addr, router_addr, amount)
-        router_abi = [{"inputs": [{"name": "p", "type": "address"}, {"name": "t", "type": "address"}, {"name": "m", "type": "address"}, {"name": "a", "type": "uint256"}, {"name": "o", "type": "bytes32"}, {"name": "d", "type": "uint256"}, {"name": "v", "type": "uint8"}, {"name": "r", "type": "bytes32"}, {"name": "s", "type": "bytes32"}], "name": "payWithPermit", "outputs": [], "stateMutability": "nonpayable", "type": "function"}]
+        router_abi = [{"inputs": [{"name": "payer", "type": "address"}, {"name": "token", "type": "address"}, {"name": "merchant", "type": "address"}, {"name": "amount", "type": "uint256"}, {"name": "orderId", "type": "bytes32"}, {"name": "deadline", "type": "uint256"}, {"name": "v", "type": "uint8"}, {"name": "r", "type": "bytes32"}, {"name": "s", "type": "bytes32"}], "name": "payWithPermit", "outputs": [], "stateMutability": "nonpayable", "type": "function"}]
         router = self.w3.eth.contract(address=Web3.to_checksum_address(router_addr), abi=router_abi)
         order_id_bytes = self.w3.keccak(text=order_id)
         
@@ -199,7 +199,7 @@ class PayNodeAgentClient:
 
     def _execute_pay(self, router_addr, token_addr, merchant_addr, amount, order_id):
         """Standard pay method (fallback)."""
-        router_abi = [{"inputs": [{"name": "t", "type": "address"}, {"name": "m", "type": "address"}, {"name": "a", "type": "uint256"}, {"name": "o", "type": "bytes32"}], "name": "pay", "outputs": [], "stateMutability": "nonpayable", "type": "function"}]
+        router_abi = [{"inputs": [{"name": "token", "type": "address"}, {"name": "merchant", "type": "address"}, {"name": "amount", "type": "uint256"}, {"name": "orderId", "type": "bytes32"}], "name": "pay", "outputs": [], "stateMutability": "nonpayable", "type": "function"}]
         router = self.w3.eth.contract(address=Web3.to_checksum_address(router_addr), abi=router_abi)
         order_id_bytes = self.w3.keccak(text=order_id)
         current_gas_price = int(self.w3.eth.gas_price * 1.2)

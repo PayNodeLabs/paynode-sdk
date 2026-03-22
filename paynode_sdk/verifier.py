@@ -4,10 +4,20 @@ from .idempotency import MemoryIdempotencyStore
 from web3 import Web3
 
 class PayNodeVerifier:
-    def __init__(self, rpc_url=None, contract_address=None, chain_id=None, w3=None, store=None, accepted_tokens=None):
+    def __init__(self, rpc_urls=None, contract_address=None, chain_id=None, w3=None, store=None, accepted_tokens=None):
         self.w3 = w3
-        if not self.w3 and rpc_url:
-            self.w3 = Web3(Web3.HTTPProvider(rpc_url))
+        if not self.w3 and rpc_urls:
+            urls = rpc_urls if isinstance(rpc_urls, list) else [rpc_urls]
+            for rpc in urls:
+                try:
+                    temp_w3 = Web3(Web3.HTTPProvider(rpc, request_kwargs={'timeout': 5}))
+                    if temp_w3.is_connected():
+                        self.w3 = temp_w3
+                        break
+                except Exception:
+                    continue
+            if not self.w3:
+                raise PayNodeException("Failed to connect to any provided RPC nodes.", ErrorCode.RPC_ERROR)
         self.contract_address = contract_address
         self.chain_id = int(chain_id) if chain_id else None
         self.store = store or MemoryIdempotencyStore()

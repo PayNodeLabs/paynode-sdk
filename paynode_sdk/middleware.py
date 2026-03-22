@@ -12,7 +12,7 @@ class PayNodeMiddleware(BaseHTTPMiddleware):
     def __init__(
         self,
         app: Any,
-        rpc_url: str,
+        rpc_urls: list | str,
         contract_address: str,
         merchant_address: str,
         chain_id: int,
@@ -25,7 +25,7 @@ class PayNodeMiddleware(BaseHTTPMiddleware):
     ):
         super().__init__(app)
         # The Verifier holds the state of the idempotency store
-        self.verifier = PayNodeVerifier(rpc_url, contract_address, chain_id, store=store)
+        self.verifier = PayNodeVerifier(rpc_urls=rpc_urls, contract_address=contract_address, chain_id=chain_id, store=store)
         self.merchant_address = merchant_address
         self.contract_address = contract_address
         self.currency = currency
