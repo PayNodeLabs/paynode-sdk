@@ -21,34 +21,34 @@ pip install paynode-sdk-python web3
 ### Agent Client (Payer)
 
 ```python
-from paynode_sdk import Client
+from paynode_sdk import PayNodeAgentClient
 
-agent = Client(private_key="YOUR_AGENT_PRIVATE_KEY")
+agent = PayNodeAgentClient(private_key="YOUR_AGENT_PRIVATE_KEY", rpc_url="https://mainnet.base.org")
 
 # Automatically handles the 402 challenge, executes the Base L2 transaction, and gets the data.
-response = agent.get("https://api.merchant.com/premium-data")
+response = agent.request_gate("https://api.merchant.com/premium-data", method="POST", json={"agent": "PythonAgent"})
 
 print(response.json())
 ```
 
-### Merchant Middleware (FastAPI Receiver)
+---
 
-```python
-from fastapi import FastAPI, Depends
-from paynode_sdk.middleware import PayNodeMiddleware
+## 📦 Publishing to PyPI
 
-app = FastAPI()
+To publish a new version of the SDK:
 
-# Protect routes with a 1.50 USDC fee requirement
-require_payment = PayNodeMiddleware(
-    price=1.50, 
-    merchant_wallet="0xYourWalletAddress..."
-)
-
-@app.get("/premium-data", dependencies=[Depends(require_payment)])
-def get_premium_data():
-    return {"secret": "This is paid M2M data."}
-```
+1. **Install build tools**:
+   ```bash
+   pip install build twine
+   ```
+2. **Build the package**:
+   ```bash
+   python -m build
+   ```
+3. **Upload to PyPI**:
+   ```bash
+   python -m twine upload dist/*
+   ```
 
 ---
 *Built for the Autonomous AI Economy by PayNodeLabs.*
