@@ -47,13 +47,21 @@ cp .env.example .env
 # Edit .env with your private key and RPC URLs
 ```
 
-### 2. Run the Merchant Server (FastAPI)
+### 2. Get Test Tokens (Required for Base Sepolia)
+
+If you're testing on Sepolia, run the helper script to mint 1,000 mock USDC:
+
+```bash
+python examples/mint_test_tokens.py
+```
+
+### 3. Run the Merchant Server (FastAPI)
 
 ```bash
 python examples/fastapi_server.py
 ```
 
-### 3. Run the Agent Client
+### 4. Run the Agent Client
 
 In another terminal:
 
