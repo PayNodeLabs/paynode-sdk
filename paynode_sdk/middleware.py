@@ -61,7 +61,7 @@ class PayNodeMiddleware(BaseHTTPMiddleware):
                 headers=headers,
                 content={
                     "error": "Payment Required",
-                    "code": ErrorCode.MISSING_RECEIPT,
+                    "code": ErrorCode.missing_receipt,
                     "message": "Please pay to PayNode contract and provide 'x-paynode-receipt' header.",
                     "amount": self.price,
                     "currency": self.currency
@@ -87,7 +87,7 @@ class PayNodeMiddleware(BaseHTTPMiddleware):
                 status_code=403,
                 content={
                     "error": "Forbidden",
-                    "code": err.code if hasattr(err, 'code') else ErrorCode.INVALID_RECEIPT,
+                    "code": err.code if hasattr(err, 'code') else ErrorCode.invalid_receipt,
                     "message": str(err)
                 }
             )

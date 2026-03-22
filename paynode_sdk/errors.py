@@ -2,26 +2,18 @@ from enum import Enum
 from typing import Any, Optional
 
 class ErrorCode(str, Enum):
-    # Authentication & Receipts
-    MISSING_RECEIPT = 'PAYNODE_MISSING_RECEIPT'
-    INVALID_RECEIPT = 'PAYNODE_INVALID_RECEIPT'
-    RECEIPT_ALREADY_USED = 'PAYNODE_RECEIPT_ALREADY_USED'
-    TRANSACTION_NOT_FOUND = 'PAYNODE_TRANSACTION_NOT_FOUND'
-    TRANSACTION_FAILED = 'PAYNODE_TRANSACTION_FAILED'
-
-    # Validation
-    WRONG_CONTRACT = 'PAYNODE_WRONG_CONTRACT'
-    WRONG_MERCHANT = 'PAYNODE_WRONG_MERCHANT'
-    WRONG_TOKEN = 'PAYNODE_WRONG_TOKEN'
-    TOKEN_NOT_ACCEPTED = 'PAYNODE_TOKEN_NOT_ACCEPTED'
-    AMOUNT_TOO_LOW = 'PAYNODE_AMOUNT_TOO_LOW'
-    INSUFFICIENT_FUNDS = 'PAYNODE_INSUFFICIENT_FUNDS'
-    ORDER_MISMATCH = 'PAYNODE_ORDER_MISMATCH'
-    PERMIT_FAILED = 'PAYNODE_PERMIT_FAILED'
-    
-    # System
-    RPC_ERROR = 'PAYNODE_RPC_ERROR'
-    INTERNAL_ERROR = 'PAYNODE_INTERNAL_ERROR'
+    rpc_error = 'rpc_error'
+    insufficient_funds = 'insufficient_funds'
+    amount_too_low = 'amount_too_low'
+    token_not_accepted = 'token_not_accepted'
+    transaction_failed = 'transaction_failed'
+    duplicate_transaction = 'duplicate_transaction'
+    invalid_receipt = 'invalid_receipt'
+    internal_error = 'internal_error'
+    transaction_not_found = 'transaction_not_found'
+    wrong_contract = 'wrong_contract'
+    order_mismatch = 'order_mismatch'
+    missing_receipt = 'missing_receipt'
 
 class PayNodeException(Exception):
     def __init__(self, message: str, code: ErrorCode, details: Optional[Any] = None):
