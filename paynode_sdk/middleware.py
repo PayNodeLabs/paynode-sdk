@@ -6,9 +6,12 @@ from .verifier import PayNodeVerifier
 from .errors import ErrorCode
 from .idempotency import IdempotencyStore
 
-class PayNodeMiddleware:
+from starlette.middleware.base import BaseHTTPMiddleware
+
+class PayNodeMiddleware(BaseHTTPMiddleware):
     def __init__(
         self,
+        app: Any,
         rpc_url: str,
         contract_address: str,
         merchant_address: str,
@@ -20,6 +23,7 @@ class PayNodeMiddleware:
         store: Optional[IdempotencyStore] = None,
         generate_order_id: Optional[Callable[[Request], str]] = None
     ):
+        super().__init__(app)
         # The Verifier holds the state of the idempotency store
         self.verifier = PayNodeVerifier(rpc_url, contract_address, chain_id, store=store)
         self.merchant_address = merchant_address
@@ -34,7 +38,7 @@ class PayNodeMiddleware:
         # Calculate raw amount (integer)
         self.amount_int = int(float(price) * (10 ** decimals))
 
-    async def __call__(self, request: Request, call_next):
+    async def dispatch(self, request: Request, call_next):
         receipt_hash = request.headers.get('x-paynode-receipt')
         order_id = request.headers.get('x-paynode-order-id')
 
@@ -78,6 +82,7 @@ class PayNodeMiddleware:
         else:
             # Validation Failed
             err = result.get("error")
+            print(f"❌ [PayNode-PY] Verification Failed for Order: {order_id}. Reason: {str(err)}")
             return JSONResponse(
                 status_code=403,
                 content={

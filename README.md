@@ -23,13 +23,45 @@ pip install paynode-sdk-python web3
 ```python
 from paynode_sdk import PayNodeAgentClient
 
-agent = PayNodeAgentClient(private_key="YOUR_AGENT_PRIVATE_KEY", rpc_url="https://mainnet.base.org")
+agent = PayNodeAgentClient(
+    private_key="YOUR_AGENT_PRIVATE_KEY",
+    rpc_urls=["https://mainnet.base.org", "https://rpc.ankr.com/base"]
+)
 
 # Automatically handles the 402 challenge, executes the Base L2 transaction, and gets the data.
 response = agent.request_gate("https://api.merchant.com/premium-data", method="POST", json={"agent": "PythonAgent"})
 
 print(response.json())
 ```
+
+## 🚀 Run the Demo
+
+The SDK includes a complete Merchant/Agent demo in the `examples/` directory.
+
+### 1. Setup Environment
+
+Copy the example environment file and fill in your keys:
+
+```bash
+cp .env.example .env
+# Edit .env with your private key and RPC URLs
+```
+
+### 2. Run the Merchant Server (FastAPI)
+
+```bash
+python examples/fastapi_server.py
+```
+
+### 3. Run the Agent Client
+
+In another terminal:
+
+```bash
+python examples/agent_client.py
+```
+
+The demo will perform a full loop: `402 Handshake -> On-chain Payment -> 200 Verification`.
 
 ---
 
@@ -51,4 +83,5 @@ To publish a new version of the SDK:
    ```
 
 ---
-*Built for the Autonomous AI Economy by PayNodeLabs.*
+
+_Built for the Autonomous AI Economy by PayNodeLabs._

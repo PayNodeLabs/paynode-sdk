@@ -1,0 +1,9 @@
+2026-03-22 19:41:40,772 [INFO] Initializing PayNode Agent Client...
+2026-03-22 19:41:41,525 [INFO] Agent Wallet: 0x990deA6734A7090E28B33aA00BFA9Dd78Bebf4c2
+2026-03-22 19:41:41,525 [INFO] Requesting data from: http://localhost:8000/api/premium-python-data...
+2026-03-22 19:41:41,528 [INFO] 💡 [PayNode-PY] 402 Detected. Handling payment...
+2026-03-22 19:41:43,363 [INFO] ✅ [PayNode-PY] Payment successful: 0xaefadedcb90c0441124b2b51195f7422803506608f730fbe6dd844887f191d89
+2026-03-22 19:41:45,482 [INFO] 🎉 SUCCESS! Premium Data Received:
+2026-03-22 19:41:45,482 [INFO] Message: Premium content served by PayNode-Python SDK.
+2026-03-22 19:41:45,482 [INFO] Secret: AGENTIC_BASE_SUMMIT_2026
+2026-03-22 19:41:45,482 [INFO] Transaction ID: 0xaefadedcb90c0441124b2b51195f7422803506608f730fbe6dd844887f191d89

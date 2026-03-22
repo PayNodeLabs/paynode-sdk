@@ -1,0 +1,13 @@
+INFO:     Started server process [2028604]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
+🚀 PayNode Python Server starting on http://localhost:8000
+🔒 Protected Endpoint: http://localhost:8000/api/premium-python-data
+INFO:     127.0.0.1:48892 - "GET /api/premium-python-data HTTP/1.1" 402 Payment Required
+/root/miniconda3/envs/paynode-py/lib/python3.11/site-packages/eth_utils/functional.py:47: UserWarning: The log with transaction hash: HexBytes('0xaefadedcb90c0441124b2b51195f7422803506608f730fbe6dd844887f191d89') and logIndex: 74 encountered the following error during processing: MismatchedABI(The event signature did not match the provided ABI). It has been discarded.
+  return callback(fn(*args, **kwargs))
+/root/miniconda3/envs/paynode-py/lib/python3.11/site-packages/eth_utils/functional.py:47: UserWarning: The log with transaction hash: HexBytes('0xaefadedcb90c0441124b2b51195f7422803506608f730fbe6dd844887f191d89') and logIndex: 75 encountered the following error during processing: MismatchedABI(The event signature did not match the provided ABI). It has been discarded.
+  return callback(fn(*args, **kwargs))
+✅ [Py-PayNode] Payment Verified. Tx: 0xaefadedcb90c0441124b2b51195f7422803506608f730fbe6dd844887f191d89, Order: agent_py_1774179701528
+INFO:     127.0.0.1:48892 - "GET /api/premium-python-data HTTP/1.1" 200 OK

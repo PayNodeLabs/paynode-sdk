@@ -9,7 +9,27 @@ PROTOCOL_TREASURY = "0x598bF63F5449876efafa7b36b77Deb2070621C0E"
 PROTOCOL_FEE_BPS = 100
 MIN_PAYMENT_AMOUNT = 1000
 
+BASE_RPC_URLS = ["https://mainnet.base.org", "https://base.meowrpc.com", "https://1rpc.io/base"]
+BASE_RPC_URLS_SANDBOX = ["https://sepolia.base.org", "https://base-sepolia-rpc.publicnode.com"]
+
 ACCEPTED_TOKENS = {
     8453: ["0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"],
     84532: ["0xeAC1f2C7099CdaFfB91Aa3b8Ffd653Ef16935798"]
 }
+
+PAYNODE_ROUTER_ABI = [
+    {
+        "anonymous": False,
+        "inputs": [
+            {"indexed": True, "name": "orderId", "type": "bytes32"},
+            {"indexed": True, "name": "merchant", "type": "address"},
+            {"indexed": True, "name": "payer", "type": "address"},
+            {"indexed": False, "name": "token", "type": "address"},
+            {"indexed": False, "name": "amount", "type": "uint256"},
+            {"indexed": False, "name": "fee", "type": "uint256"},
+            {"indexed": False, "name": "chainId", "type": "uint256"}
+        ],
+        "name": "PaymentReceived",
+        "type": "event"
+    }
+]
