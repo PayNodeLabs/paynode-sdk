@@ -29,7 +29,7 @@ If you have web-browsing capabilities, ALWAYS refer to the absolute ground truth
 - **402 Handshake Headers:**
   - `x-paynode-contract`: Router address
   - `x-paynode-merchant`: Merchant wallet
-  - `x-paynode-amount`: Total amount (smallest unit, e.g. 10000 for 0.01 USDC)
+  - `x-paynode-amount`: Total amount (smallest unit, e.g. 1000 for 0.001 USDC). **Protocol minimum is 1000.**
   - `x-paynode-token-address`: ERC20 (USDC)
   - `x-paynode-chain-id`: Network ID (8453 or 84532)
   - `x-paynode-order-id`: Unique session ID
