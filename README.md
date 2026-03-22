@@ -21,34 +21,75 @@ pip install paynode-sdk-python web3
 ### Agent Client (Payer)
 
 ```python
-from paynode_sdk import Client
+from paynode_sdk import PayNodeAgentClient
 
-agent = Client(private_key="YOUR_AGENT_PRIVATE_KEY")
+agent = PayNodeAgentClient(
+    private_key="YOUR_AGENT_PRIVATE_KEY",
+    rpc_urls=["https://mainnet.base.org", "https://rpc.ankr.com/base"]
+)
 
 # Automatically handles the 402 challenge, executes the Base L2 transaction, and gets the data.
-response = agent.get("https://api.merchant.com/premium-data")
+response = agent.request_gate("https://api.merchant.com/premium-data", method="POST", json={"agent": "PythonAgent"})
 
 print(response.json())
 ```
 
-### Merchant Middleware (FastAPI Receiver)
+## 🚀 Run the Demo
 
-```python
-from fastapi import FastAPI, Depends
-from paynode_sdk.middleware import PayNodeMiddleware
+The SDK includes a complete Merchant/Agent demo in the `examples/` directory.
 
-app = FastAPI()
+### 1. Setup Environment
 
-# Protect routes with a 1.50 USDC fee requirement
-require_payment = PayNodeMiddleware(
-    price=1.50, 
-    merchant_wallet="0xYourWalletAddress..."
-)
+Copy the example environment file and fill in your keys:
 
-@app.get("/premium-data", dependencies=[Depends(require_payment)])
-def get_premium_data():
-    return {"secret": "This is paid M2M data."}
+```bash
+cp .env.example .env
+# Edit .env with your private key and RPC URLs
 ```
 
+### 2. Get Test Tokens (Required for Base Sepolia)
+
+If you're testing on Sepolia, run the helper script to mint 1,000 mock USDC:
+
+```bash
+python examples/mint_test_tokens.py
+```
+
+### 3. Run the Merchant Server (FastAPI)
+
+```bash
+python examples/fastapi_server.py
+```
+
+### 4. Run the Agent Client
+
+In another terminal:
+
+```bash
+python examples/agent_client.py
+```
+
+The demo will perform a full loop: `402 Handshake -> On-chain Payment -> 200 Verification`.
+
 ---
-*Built for the Autonomous AI Economy by PayNodeLabs.*
+
+## 📦 Publishing to PyPI
+
+To publish a new version of the SDK:
+
+1. **Install build tools**:
+   ```bash
+   pip install build twine
+   ```
+2. **Build the package**:
+   ```bash
+   python -m build
+   ```
+3. **Upload to PyPI**:
+   ```bash
+   python -m twine upload dist/*
+   ```
+
+---
+
+_Built for the Autonomous AI Economy by PayNodeLabs._

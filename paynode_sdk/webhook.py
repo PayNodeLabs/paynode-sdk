@@ -213,7 +213,7 @@ class PayNodeWebhookNotifier:
                     if resp.status >= 400:
                         raise PayNodeException(
                             f"Webhook returned {resp.status}",
-                            ErrorCode.INTERNAL_ERROR
+                            ErrorCode.internal_error
                         )
 
                     logger.info(f"✅ [PayNode Webhook] Delivered tx {event.tx_hash[:10]}... → {resp.status}")
