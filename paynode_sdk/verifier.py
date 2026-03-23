@@ -70,9 +70,6 @@ class PayNodeVerifier:
         if receipt.get("status") == 0:
             return {"isValid": False, "error": PayNodeException("Transaction failed", ErrorCode.transaction_failed)}
 
-        if not receipt.get("to") or receipt.get("to", "").lower() != self.contract_address.lower():
-            return {"isValid": False, "error": PayNodeException("Wrong contract", ErrorCode.wrong_contract)}
-
         contract = self.w3.eth.contract(address=Web3.to_checksum_address(self.contract_address), abi=PAYNODE_ROUTER_ABI)
         
         try:
@@ -93,6 +90,9 @@ class PayNodeVerifier:
         valid_log_found = False
 
         for log in logs:
+            if log.address.lower() != self.contract_address.lower():
+                continue
+                
             args = log.args
             
             # 4. Verify OrderId

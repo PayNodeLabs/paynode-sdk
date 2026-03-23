@@ -97,3 +97,14 @@ class PayNodeMiddleware(BaseHTTPMiddleware):
                     "message": str(err)
                 }
             )
+
+def x402_gate(
+    merchant_address: str, 
+    price: str,
+    **kwargs
+) -> Any:
+    """
+    Semantic helper to mirror JS x402Gate. 
+    Usage: app.add_middleware(x402_gate, merchant_address=..., price=...)
+    """
+    return lambda app: PayNodeMiddleware(app, merchant_address=merchant_address, price=price, **kwargs)
