@@ -6,7 +6,7 @@ from eth_account.messages import encode_typed_data
 from web3 import Web3
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
-from .constants import PAYNODE_ROUTER_ADDRESS, BASE_USDC_ADDRESS, BASE_USDC_DECIMALS
+from .constants import PAYNODE_ROUTER_ADDRESS, BASE_USDC_ADDRESS, BASE_USDC_DECIMALS, BASE_RPC_URLS, ACCEPTED_TOKENS
 from .errors import PayNodeException, ErrorCode
 
 logger = logging.getLogger("paynode_sdk.client")
@@ -17,7 +17,7 @@ class PayNodeAgentClient:
     Automatically handles the x402 'Payment Required' handshake.
     Supports RPC redundancy and EIP-2612 Permit-First payments.
     """
-    def __init__(self, private_key: str, rpc_urls: list | str = "https://mainnet.base.org"):
+    def __init__(self, private_key: str, rpc_urls: list | str = BASE_RPC_URLS):
         self.rpc_urls = rpc_urls if isinstance(rpc_urls, list) else [rpc_urls]
         self.w3 = self._init_w3()
         
@@ -46,7 +46,7 @@ class PayNodeAgentClient:
             except Exception as e:
                 logger.warning(f"⚠️ [PayNode-PY] RPC {rpc} failed: {str(e)}")
                 continue
-        raise PayNodeException("Failed to connect to any provided RPC nodes.", ErrorCode.rpc_error)
+        raise PayNodeException(ErrorCode.rpc_error)
 
     def request_gate(self, url: str, method: str = "GET", **kwargs):
         """The high-level autonomous method handling 402 loop."""
@@ -67,7 +67,7 @@ class PayNodeAgentClient:
                     kwargs = self._handle_402(response.headers, **kwargs)
                 except Exception as e:
                     if isinstance(e, PayNodeException): raise
-                    raise PayNodeException(f"An unexpected error occurred: {str(e)}", ErrorCode.internal_error)
+                    raise PayNodeException(ErrorCode.internal_error, message=f"An unexpected error occurred: {str(e)}")
                 continue
             return response
         return response
@@ -78,13 +78,29 @@ class PayNodeAgentClient:
         amount_raw = int(headers.get('x-paynode-amount', 0))
         token_addr = headers.get('x-paynode-token-address')
         order_id = headers.get('x-paynode-order-id')
+        currency = headers.get('x-paynode-currency', 'USDC')
+        chain_id_header = headers.get('x-paynode-chain-id')
 
         if not all([router_addr, merchant_addr, amount_raw, token_addr, order_id]):
-            raise PayNodeException("Malformed 402 headers: missing metadata", ErrorCode.internal_error)
+            raise PayNodeException(ErrorCode.internal_error, message="Malformed 402 headers: missing metadata")
+
+        # Network safety check (v1.4)
+        if chain_id_header:
+            current_chain_id = self.w3.eth.chain_id
+            if int(chain_id_header) != current_chain_id:
+                raise PayNodeException(ErrorCode.invalid_receipt, message=f"Network mismatch: Current {current_chain_id}, Request {chain_id_header}.")
+
+        logger.info(f"💡 [PayNode-PY] Payment request: {amount_raw} {currency} to {merchant_addr}")
 
         # v1.3 Constraint: Min payment protection
         if amount_raw < 1000:
-            raise PayNodeException("Payment amount is below the protocol minimum (1000).", ErrorCode.amount_too_low)
+            raise PayNodeException(ErrorCode.amount_too_low)
+
+        # v1.4 Constraint: Token whitelist pre-flight (Anti-FakeToken)
+        resolved_chain_id = int(chain_id_header) if chain_id_header else 8453
+        whitelist = ACCEPTED_TOKENS.get(resolved_chain_id, [])
+        if whitelist and token_addr and token_addr.lower() not in [t.lower() for t in whitelist]:
+            raise PayNodeException(ErrorCode.token_not_accepted)
 
         # Protocol v1.3: Permit-First Execution
         try:
@@ -94,12 +110,12 @@ class PayNodeAgentClient:
                 tx_hash = self._execute_pay(router_addr, token_addr, merchant_addr, amount_raw, order_id)
             else:
                 logger.info("⚡ [PayNode-PY] Insufficient allowance. Attempting Permit-First payment...")
-                tx_hash = self.pay_with_permit_auto(router_addr, token_addr, merchant_addr, amount_raw, order_id)
+                tx_hash = self.pay_with_permit(router_addr, token_addr, merchant_addr, amount_raw, order_id)
             
             logger.info(f"✅ [PayNode-PY] Payment successful: {tx_hash}")
         except Exception as e:
             if isinstance(e, PayNodeException): raise
-            raise PayNodeException(f"On-chain transaction reverted or failed: {str(e)}", ErrorCode.transaction_failed)
+            raise PayNodeException(ErrorCode.transaction_failed, details=e)
 
         retry_headers = kwargs.get('headers', {}).copy()
         retry_headers.update({'x-paynode-receipt': tx_hash, 'x-paynode-order-id': order_id})
@@ -173,7 +189,7 @@ class PayNodeAgentClient:
             "deadline": deadline
         }
 
-    def pay_with_permit_auto(self, router_addr, token_addr, merchant_addr, amount, order_id):
+    def pay_with_permit(self, router_addr, token_addr, merchant_addr, amount, order_id):
         """Combines sign_permit and on-chain submission."""
         sig = self.sign_permit(token_addr, router_addr, amount)
         router_abi = [{"inputs": [{"name": "payer", "type": "address"}, {"name": "token", "type": "address"}, {"name": "merchant", "type": "address"}, {"name": "amount", "type": "uint256"}, {"name": "orderId", "type": "bytes32"}, {"name": "deadline", "type": "uint256"}, {"name": "v", "type": "uint8"}, {"name": "r", "type": "bytes32"}, {"name": "s", "type": "bytes32"}], "name": "payWithPermit", "outputs": [], "stateMutability": "nonpayable", "type": "function"}]

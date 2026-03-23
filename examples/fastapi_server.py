@@ -1,39 +1,31 @@
 import uvicorn
 import os
 from fastapi import FastAPI, Request
-from paynode_sdk import PayNodeMiddleware # This correctly references local source
+from paynode_sdk import (
+    PayNodeMiddleware, 
+    PAYNODE_ROUTER_ADDRESS_SANDBOX, 
+    BASE_USDC_ADDRESS_SANDBOX
+)
 from dotenv import load_dotenv
 
-# Load environment variables from .env file
 load_dotenv()
 
 app = FastAPI(title="PayNode Python Merchant Demo")
 
-# PayNode Python Merchant Demo (FastAPI)
-#
-# To run:
-# 1. Install deps: pip install fastapi uvicorn python-dotenv paynode-sdk-python
-# 2. Setup your .env file (based on .env.example)
-# 3. Run: python examples/fastapi_server.py
+# 🚀 PayNode Python Merchant Demo (FastAPI)
+# 
+# Minimal configuration using defaults for Base Mainnet:
+# app.add_middleware(PayNodeMiddleware, merchant_address='0x...', price='1.00')
 
-# Configuration (Base Sepolia)
-PAYNODE_CONFIG = {
-    "rpc_url": os.getenv("PAYNODE_RPC_URL", "https://sepolia.base.org"),
-    "contract_address": os.getenv("PAYNODE_CONTRACT_ADDRESS", "0xB587Bc36aaCf65962eCd6Ba59e2DA76f2f575408"), # PayNode Router
-    "merchant_address": os.getenv("MERCHANT_ADDRESS", "0xYourMerchantWalletAddress"), 
-    "chain_id": int(os.getenv("CHAIN_ID", 84532)),
-    "currency": os.getenv("CURRENCY", "USDC"),
-    "token_address": os.getenv("MERCHANT_TOKEN_ADDRESS", "0xYourDeployedTokenAddress"), 
-    "price": os.getenv("PRICE", "0.01"),
-    "decimals": int(os.getenv("TOKEN_DECIMALS", 6)),
-}
-
-# Apply the Middleware globally or to specific routers
-# This middleware also handles:
-# 1. Inspecting headers for 'x-paynode-receipt' (txHash)
-# 2. On-chain verification for correct merchant, amount, token, and chainId
-# 3. Idempotency check (preventing same txHash from double-spending access)
-app.add_middleware(PayNodeMiddleware, **PAYNODE_CONFIG)
+app.add_middleware(
+    PayNodeMiddleware,
+    merchant_address=os.getenv("MERCHANT_ADDRESS", "0xYourMerchantWalletAddress"), 
+    price="0.10",
+    # Overriding defaults for Sandbox (Sepolia)
+    chain_id=84532,
+    contract_address=PAYNODE_ROUTER_ADDRESS_SANDBOX,
+    token_address=BASE_USDC_ADDRESS_SANDBOX,
+)
 
 @app.get("/api/premium-python-data")
 async def get_premium_data(request: Request):
