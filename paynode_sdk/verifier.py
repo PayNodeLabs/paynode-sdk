@@ -53,12 +53,7 @@ class PayNodeVerifier:
                 message=f"Token {expected.get('tokenAddress')} is not in the accepted whitelist."
             )}
 
-        try:
-            is_new = await self.store.check_and_set(tx_hash, 86400) # 24 hour TTL
-            if not is_new:
-                return {"isValid": False, "error": PayNodeException(ErrorCode.duplicate_transaction)}
-        except Exception as e:
-            return {"isValid": False, "error": PayNodeException(ErrorCode.internal_error, details=str(e))}
+
 
         # Wrap synchronous web3 calls in asyncio.to_thread to avoid blocking the event loop
         try:
@@ -93,6 +88,7 @@ class PayNodeVerifier:
 
         for log in logs:
             if log.address.lower() != self.contract_address.lower():
+                last_error = last_error or PayNodeException(ErrorCode.wrong_contract)
                 continue
                 
             args = log.args
@@ -127,5 +123,12 @@ class PayNodeVerifier:
 
         if not valid_log_found:
             return {"isValid": False, "error": last_error or PayNodeException(ErrorCode.invalid_receipt, message="No matching payment event found.")}
+
+        try:
+            is_new = await self.store.check_and_set(tx_hash, 86400) # 24 hour TTL
+            if not is_new:
+                return {"isValid": False, "error": PayNodeException(ErrorCode.duplicate_transaction)}
+        except Exception as e:
+            return {"isValid": False, "error": PayNodeException(ErrorCode.internal_error, details=str(e))}
 
         return {"isValid": True}
