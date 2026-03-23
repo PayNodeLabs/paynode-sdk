@@ -6,7 +6,7 @@ from eth_account.messages import encode_typed_data
 from web3 import Web3
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
-from .constants import PAYNODE_ROUTER_ADDRESS, BASE_USDC_ADDRESS, BASE_USDC_DECIMALS
+from .constants import PAYNODE_ROUTER_ADDRESS, BASE_USDC_ADDRESS, BASE_USDC_DECIMALS, BASE_RPC_URLS
 from .errors import PayNodeException, ErrorCode
 
 logger = logging.getLogger("paynode_sdk.client")
@@ -17,7 +17,7 @@ class PayNodeAgentClient:
     Automatically handles the x402 'Payment Required' handshake.
     Supports RPC redundancy and EIP-2612 Permit-First payments.
     """
-    def __init__(self, private_key: str, rpc_urls: list | str = "https://mainnet.base.org"):
+    def __init__(self, private_key: str, rpc_urls: list | str = BASE_RPC_URLS):
         self.rpc_urls = rpc_urls if isinstance(rpc_urls, list) else [rpc_urls]
         self.w3 = self._init_w3()
         
@@ -78,9 +78,12 @@ class PayNodeAgentClient:
         amount_raw = int(headers.get('x-paynode-amount', 0))
         token_addr = headers.get('x-paynode-token-address')
         order_id = headers.get('x-paynode-order-id')
+        currency = headers.get('x-paynode-currency', 'USDC')
 
         if not all([router_addr, merchant_addr, amount_raw, token_addr, order_id]):
             raise PayNodeException("Malformed 402 headers: missing metadata", ErrorCode.internal_error)
+
+        logger.info(f"💡 [PayNode-PY] Payment request: {amount_raw} {currency} to {merchant_addr}")
 
         # v1.3 Constraint: Min payment protection
         if amount_raw < 1000:
@@ -94,7 +97,7 @@ class PayNodeAgentClient:
                 tx_hash = self._execute_pay(router_addr, token_addr, merchant_addr, amount_raw, order_id)
             else:
                 logger.info("⚡ [PayNode-PY] Insufficient allowance. Attempting Permit-First payment...")
-                tx_hash = self.pay_with_permit_auto(router_addr, token_addr, merchant_addr, amount_raw, order_id)
+                tx_hash = self.pay_with_permit(router_addr, token_addr, merchant_addr, amount_raw, order_id)
             
             logger.info(f"✅ [PayNode-PY] Payment successful: {tx_hash}")
         except Exception as e:
@@ -173,7 +176,7 @@ class PayNodeAgentClient:
             "deadline": deadline
         }
 
-    def pay_with_permit_auto(self, router_addr, token_addr, merchant_addr, amount, order_id):
+    def pay_with_permit(self, router_addr, token_addr, merchant_addr, amount, order_id):
         """Combines sign_permit and on-chain submission."""
         sig = self.sign_permit(token_addr, router_addr, amount)
         router_abi = [{"inputs": [{"name": "payer", "type": "address"}, {"name": "token", "type": "address"}, {"name": "merchant", "type": "address"}, {"name": "amount", "type": "uint256"}, {"name": "orderId", "type": "bytes32"}, {"name": "deadline", "type": "uint256"}, {"name": "v", "type": "uint8"}, {"name": "r", "type": "bytes32"}, {"name": "s", "type": "bytes32"}], "name": "payWithPermit", "outputs": [], "stateMutability": "nonpayable", "type": "function"}]

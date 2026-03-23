@@ -1,6 +1,7 @@
 import os
 import logging
-from paynode_sdk import PayNodeAgentClient # sdk-python repository
+from paynode_sdk import PayNodeAgentClient
+from paynode_sdk.constants import BASE_RPC_URLS_SANDBOX
 from dotenv import load_dotenv
 
 # Load environment variables
@@ -18,7 +19,7 @@ logger = logging.getLogger("paynode_demo")
 # 3. Run: python examples/agent_client.py
 
 # Configuration
-TESTNET_RPC = os.getenv("PAYNODE_RPC_URL", "https://sepolia.base.org")
+TESTNET_RPC = BASE_RPC_URLS_SANDBOX[0]
 PRIVATE_KEY = os.getenv("CLIENT_PRIVATE_KEY", "0xYourTestnetPrivateKeyHere")
 MERCHANT_URL = os.getenv("TARGET_MERCHANT_URL", "http://localhost:8000/api/premium-python-data")
 
@@ -44,11 +45,11 @@ def run_agent_demo():
     
     logger.info(f"Agent Wallet: {agent.account.address}")
     
-    # 🎯 Single Get call: This handles the entire 402 logic internally
+    # 🎯 Single Request call: This handles the entire 402 logic internally
     logger.info(f"Requesting data from: {MERCHANT_URL}...")
     
     try:
-        response = agent.get(MERCHANT_URL)
+        response = agent.request_gate(MERCHANT_URL)
         
         # 🎊 If we've reached here, the payment was successful!
         if response.status_code == 200:

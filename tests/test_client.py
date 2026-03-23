@@ -51,7 +51,7 @@ def test_402_handshake_parsing(client):
     )
     
     # 3. Patch the on-chain payment logic to just return a fake TxHash
-    with patch.object(client, 'pay_with_permit_auto', return_value=MOCK_TX_HASH) as mock_pay, \
+    with patch.object(client, 'pay_with_permit', return_value=MOCK_TX_HASH) as mock_pay, \
          patch.object(client, '_get_allowance', return_value=0): # Trigger permit
         
         response = client.get(target_url)
@@ -75,7 +75,7 @@ def test_dust_limit_protection(client):
     
     with pytest.raises(PayNodeException) as exc:
         client._handle_402(headers)
-    assert exc.value.code == ErrorCode.AMOUNT_TOO_LOW
+    assert exc.value.code == ErrorCode.amount_too_low
 
 def test_rpc_failover_logic():
     """
@@ -105,4 +105,4 @@ def test_insufficient_funds_on_chain(client):
         
         with pytest.raises(PayNodeException) as exc:
             client.get(target_url)
-        assert exc.value.code == ErrorCode.TRANSACTION_FAILED
+        assert exc.value.code == ErrorCode.transaction_failed

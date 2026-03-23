@@ -5,6 +5,12 @@ from fastapi.responses import JSONResponse
 from .verifier import PayNodeVerifier
 from .errors import ErrorCode
 from .idempotency import IdempotencyStore
+from .constants import (
+    BASE_RPC_URLS, 
+    PAYNODE_ROUTER_ADDRESS, 
+    BASE_USDC_ADDRESS, 
+    BASE_USDC_DECIMALS
+)
 
 from starlette.middleware.base import BaseHTTPMiddleware
 
@@ -12,14 +18,14 @@ class PayNodeMiddleware(BaseHTTPMiddleware):
     def __init__(
         self,
         app: Any,
-        rpc_urls: list | str,
-        contract_address: str,
         merchant_address: str,
-        chain_id: int,
-        currency: str,
-        token_address: str,
         price: str,
-        decimals: int,
+        contract_address: str = PAYNODE_ROUTER_ADDRESS,
+        chain_id: int = 8453,
+        currency: str = "USDC",
+        token_address: str = BASE_USDC_ADDRESS,
+        decimals: int = BASE_USDC_DECIMALS,
+        rpc_urls: list | str = BASE_RPC_URLS,
         store: Optional[IdempotencyStore] = None,
         generate_order_id: Optional[Callable[[Request], str]] = None
     ):

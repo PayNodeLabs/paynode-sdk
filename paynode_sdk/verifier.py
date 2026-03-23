@@ -55,7 +55,7 @@ class PayNodeVerifier:
         try:
             is_new = await self.store.check_and_set(tx_hash, 86400) # 24 hour TTL
             if not is_new:
-                return {"isValid": False, "error": PayNodeException("Receipt already used", ErrorCode.receipt_already_used)}
+                return {"isValid": False, "error": PayNodeException("This transaction hash has already been consumed.", ErrorCode.duplicate_transaction)}
         except Exception as e:
             return {"isValid": False, "error": PayNodeException("Store Error", ErrorCode.internal_error, details=str(e))}
 

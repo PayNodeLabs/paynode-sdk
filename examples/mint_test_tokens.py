@@ -8,13 +8,14 @@ from dotenv import load_dotenv
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from paynode_sdk.client import PayNodeAgentClient
+from paynode_sdk.constants import BASE_USDC_ADDRESS_SANDBOX, BASE_RPC_URLS_SANDBOX
 
 load_dotenv()
 
 # Configuration
-RPC_URL = os.getenv("RPC_URL", "https://sepolia.base.org")
+RPC_URL = BASE_RPC_URLS_SANDBOX[0]
 PRIVATE_KEY = os.getenv("CLIENT_PRIVATE_KEY")
-MOCK_USDC_ADDR = "0xeAC1f2C7099CdaFfB91Aa3b8Ffd653Ef16935798"
+MOCK_USDC_ADDR = BASE_USDC_ADDRESS_SANDBOX
 
 if not PRIVATE_KEY:
     print("❌ Error: CLIENT_PRIVATE_KEY not found in .env")
