@@ -212,8 +212,8 @@ class PayNodeWebhookNotifier:
                 async with session.post(self.webhook_url, data=payload, headers=headers, timeout=aiohttp.ClientTimeout(total=10)) as resp:
                     if resp.status >= 400:
                         raise PayNodeException(
-                            f"Webhook returned {resp.status}",
-                            ErrorCode.internal_error
+                            ErrorCode.internal_error,
+                            message=f"Webhook returned {resp.status}"
                         )
 
                     logger.info(f"✅ [PayNode Webhook] Delivered tx {event.tx_hash[:10]}... → {resp.status}")

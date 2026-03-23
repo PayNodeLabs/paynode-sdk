@@ -46,7 +46,7 @@ class PayNodeAgentClient:
             except Exception as e:
                 logger.warning(f"⚠️ [PayNode-PY] RPC {rpc} failed: {str(e)}")
                 continue
-        raise PayNodeException("Failed to connect to any provided RPC nodes.", ErrorCode.rpc_error)
+        raise PayNodeException(ErrorCode.rpc_error)
 
     def request_gate(self, url: str, method: str = "GET", **kwargs):
         """The high-level autonomous method handling 402 loop."""
@@ -67,7 +67,7 @@ class PayNodeAgentClient:
                     kwargs = self._handle_402(response.headers, **kwargs)
                 except Exception as e:
                     if isinstance(e, PayNodeException): raise
-                    raise PayNodeException(f"An unexpected error occurred: {str(e)}", ErrorCode.internal_error)
+                    raise PayNodeException(ErrorCode.internal_error, message=f"An unexpected error occurred: {str(e)}")
                 continue
             return response
         return response
@@ -82,19 +82,19 @@ class PayNodeAgentClient:
         chain_id_header = headers.get('x-paynode-chain-id')
 
         if not all([router_addr, merchant_addr, amount_raw, token_addr, order_id]):
-            raise PayNodeException("Malformed 402 headers: missing metadata", ErrorCode.internal_error)
+            raise PayNodeException(ErrorCode.internal_error, message="Malformed 402 headers: missing metadata")
 
         # Network safety check (v1.4)
         if chain_id_header:
             current_chain_id = self.w3.eth.chain_id
             if int(chain_id_header) != current_chain_id:
-                raise PayNodeException(f"Network mismatch: Current {current_chain_id}, Request {chain_id_header}.", ErrorCode.invalid_receipt)
+                raise PayNodeException(ErrorCode.invalid_receipt, message=f"Network mismatch: Current {current_chain_id}, Request {chain_id_header}.")
 
         logger.info(f"💡 [PayNode-PY] Payment request: {amount_raw} {currency} to {merchant_addr}")
 
         # v1.3 Constraint: Min payment protection
         if amount_raw < 1000:
-            raise PayNodeException("Payment amount is below the protocol minimum (1000).", ErrorCode.amount_too_low)
+            raise PayNodeException(ErrorCode.amount_too_low)
 
         # Protocol v1.3: Permit-First Execution
         try:
@@ -109,7 +109,7 @@ class PayNodeAgentClient:
             logger.info(f"✅ [PayNode-PY] Payment successful: {tx_hash}")
         except Exception as e:
             if isinstance(e, PayNodeException): raise
-            raise PayNodeException(f"On-chain transaction reverted or failed: {str(e)}", ErrorCode.transaction_failed)
+            raise PayNodeException(ErrorCode.transaction_failed, details=e)
 
         retry_headers = kwargs.get('headers', {}).copy()
         retry_headers.update({'x-paynode-receipt': tx_hash, 'x-paynode-order-id': order_id})

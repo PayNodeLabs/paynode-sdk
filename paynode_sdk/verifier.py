@@ -17,7 +17,7 @@ class PayNodeVerifier:
                 except Exception:
                     continue
             if not self.w3:
-                raise PayNodeException("Failed to connect to any provided RPC nodes.", ErrorCode.rpc_error)
+                raise PayNodeException(ErrorCode.rpc_error)
         self.contract_address = contract_address
         self.chain_id = int(chain_id) if chain_id else None
         self.store = store or MemoryIdempotencyStore()
@@ -34,51 +34,51 @@ class PayNodeVerifier:
 
     async def verify_payment(self, tx_hash, expected):
         if not self.w3:
-            return {"isValid": False, "error": PayNodeException("Verifier Provider Missing", ErrorCode.rpc_error)}
+            return {"isValid": False, "error": PayNodeException(ErrorCode.rpc_error, message="Verifier Provider Missing")}
 
         # 0. Dust Exploit Check (Minimum Payment)
         amount = int(expected.get("amount", 0))
         if amount < MIN_PAYMENT_AMOUNT:
              return {"isValid": False, "error": PayNodeException(
-                f"Payment amount {amount} is below the minimum threshold of {MIN_PAYMENT_AMOUNT}.",
-                ErrorCode.amount_too_low
+                ErrorCode.amount_too_low,
+                message=f"Payment amount {amount} is below the minimum threshold of {MIN_PAYMENT_AMOUNT}."
             )}
 
         # 1. Token Whitelist Check (Anti-FakeToken)
         expected_token = expected.get("tokenAddress", "").lower()
         if self.accepted_tokens and expected_token not in self.accepted_tokens:
             return {"isValid": False, "error": PayNodeException(
-                f"Token {expected.get('tokenAddress')} is not in the accepted whitelist.",
-                ErrorCode.token_not_accepted
+                ErrorCode.token_not_accepted,
+                message=f"Token {expected.get('tokenAddress')} is not in the accepted whitelist."
             )}
 
         try:
             is_new = await self.store.check_and_set(tx_hash, 86400) # 24 hour TTL
             if not is_new:
-                return {"isValid": False, "error": PayNodeException("This transaction hash has already been consumed.", ErrorCode.duplicate_transaction)}
+                return {"isValid": False, "error": PayNodeException(ErrorCode.duplicate_transaction)}
         except Exception as e:
-            return {"isValid": False, "error": PayNodeException("Store Error", ErrorCode.internal_error, details=str(e))}
+            return {"isValid": False, "error": PayNodeException(ErrorCode.internal_error, details=str(e))}
 
         try:
             receipt = self.w3.eth.get_transaction_receipt(tx_hash)
         except Exception:
-            return {"isValid": False, "error": PayNodeException("Transaction not found", ErrorCode.transaction_not_found)}
+            return {"isValid": False, "error": PayNodeException(ErrorCode.transaction_not_found)}
 
         if not receipt:
-            return {"isValid": False, "error": PayNodeException("Transaction not found", ErrorCode.transaction_not_found)}
+            return {"isValid": False, "error": PayNodeException(ErrorCode.transaction_not_found)}
         
         if receipt.get("status") == 0:
-            return {"isValid": False, "error": PayNodeException("Transaction failed", ErrorCode.transaction_failed)}
+            return {"isValid": False, "error": PayNodeException(ErrorCode.transaction_failed)}
 
         contract = self.w3.eth.contract(address=Web3.to_checksum_address(self.contract_address), abi=PAYNODE_ROUTER_ABI)
         
         try:
             logs = contract.events.PaymentReceived().process_receipt(receipt)
         except Exception:
-            return {"isValid": False, "error": PayNodeException("Invalid receipt format", ErrorCode.invalid_receipt)}
+            return {"isValid": False, "error": PayNodeException(ErrorCode.invalid_receipt)}
 
         if not logs:
-            return {"isValid": False, "error": PayNodeException("No valid PaymentReceived event found", ErrorCode.invalid_receipt)}
+            return {"isValid": False, "error": PayNodeException(ErrorCode.invalid_receipt, message="No valid PaymentReceived event found")}
 
         # Find and validate the specific log
         merchant = expected.get("merchantAddress", "").lower()
@@ -97,33 +97,33 @@ class PayNodeVerifier:
             
             # 4. Verify OrderId
             if args.get("orderId") != order_id_bytes:
-                last_error = PayNodeException("OrderId in receipt does not match requested ID.", ErrorCode.order_mismatch)
+                last_error = PayNodeException(ErrorCode.order_mismatch)
                 continue
                 
             # 5. Verify Merchant
             if args.get("merchant", "").lower() != merchant:
-                last_error = PayNodeException("Payment went to a different merchant.", ErrorCode.invalid_receipt)
+                last_error = PayNodeException(ErrorCode.invalid_receipt, message="Payment went to a different merchant.")
                 continue
                 
             # 6. Verify Token
             if args.get("token", "").lower() != token:
-                last_error = PayNodeException("Payment used unexpected token.", ErrorCode.invalid_receipt)
+                last_error = PayNodeException(ErrorCode.invalid_receipt, message="Payment used unexpected token.")
                 continue
                 
             # 7. Verify Amount
             if args.get("amount", 0) < amount:
-                last_error = PayNodeException("Payment amount is below required price.", ErrorCode.invalid_receipt)
+                last_error = PayNodeException(ErrorCode.invalid_receipt, message="Payment amount is below required price.")
                 continue
 
             # 8. Verify ChainId
             if self.chain_id and args.get("chainId") != self.chain_id:
-                last_error = PayNodeException("ChainId mismatch. Invalid network.", ErrorCode.invalid_receipt)
+                last_error = PayNodeException(ErrorCode.invalid_receipt, message="ChainId mismatch. Invalid network.")
                 continue
 
             valid_log_found = True
             break
 
         if not valid_log_found:
-            return {"isValid": False, "error": last_error or PayNodeException("No matching payment event found.", ErrorCode.invalid_receipt)}
+            return {"isValid": False, "error": last_error or PayNodeException(ErrorCode.invalid_receipt, message="No matching payment event found.")}
 
         return {"isValid": True}
