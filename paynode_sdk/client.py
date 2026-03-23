@@ -79,9 +79,16 @@ class PayNodeAgentClient:
         token_addr = headers.get('x-paynode-token-address')
         order_id = headers.get('x-paynode-order-id')
         currency = headers.get('x-paynode-currency', 'USDC')
+        chain_id_header = headers.get('x-paynode-chain-id')
 
         if not all([router_addr, merchant_addr, amount_raw, token_addr, order_id]):
             raise PayNodeException("Malformed 402 headers: missing metadata", ErrorCode.internal_error)
+
+        # Network safety check (v1.4)
+        if chain_id_header:
+            current_chain_id = self.w3.eth.chain_id
+            if int(chain_id_header) != current_chain_id:
+                raise PayNodeException(f"Network mismatch: Current {current_chain_id}, Request {chain_id_header}.", ErrorCode.invalid_receipt)
 
         logger.info(f"💡 [PayNode-PY] Payment request: {amount_raw} {currency} to {merchant_addr}")
 
