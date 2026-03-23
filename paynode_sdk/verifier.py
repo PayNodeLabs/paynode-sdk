@@ -83,36 +83,47 @@ class PayNodeVerifier:
         if not logs:
             return {"isValid": False, "error": PayNodeException("No valid PaymentReceived event found", ErrorCode.invalid_receipt)}
 
-        # Find the valid log
+        # Find and validate the specific log
         merchant = expected.get("merchantAddress", "").lower()
         token = expected.get("tokenAddress", "").lower()
         amount = int(expected.get("amount", 0))
-        
         order_id_bytes = self.w3.keccak(text=expected.get("orderId", ""))
 
-        valid = False
+        last_error = None
+        valid_log_found = False
+
         for log in logs:
             args = log.args
             
+            # 4. Verify OrderId
             if args.get("orderId") != order_id_bytes:
+                last_error = PayNodeException("OrderId in receipt does not match requested ID.", ErrorCode.order_mismatch)
                 continue
                 
+            # 5. Verify Merchant
             if args.get("merchant", "").lower() != merchant:
+                last_error = PayNodeException("Payment went to a different merchant.", ErrorCode.invalid_receipt)
                 continue
                 
+            # 6. Verify Token
             if args.get("token", "").lower() != token:
+                last_error = PayNodeException("Payment used unexpected token.", ErrorCode.invalid_receipt)
                 continue
                 
+            # 7. Verify Amount
             if args.get("amount", 0) < amount:
+                last_error = PayNodeException("Payment amount is below required price.", ErrorCode.invalid_receipt)
                 continue
 
+            # 8. Verify ChainId
             if self.chain_id and args.get("chainId") != self.chain_id:
+                last_error = PayNodeException("ChainId mismatch. Invalid network.", ErrorCode.invalid_receipt)
                 continue
 
-            valid = True
+            valid_log_found = True
             break
 
-        if not valid:
-            return {"isValid": False, "error": PayNodeException("Payment criteria mismatch", ErrorCode.invalid_receipt)}
+        if not valid_log_found:
+            return {"isValid": False, "error": last_error or PayNodeException("No matching payment event found.", ErrorCode.invalid_receipt)}
 
         return {"isValid": True}
