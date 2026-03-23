@@ -1,3 +1,4 @@
+import asyncio
 from .errors import ErrorCode, PayNodeException
 from .constants import PAYNODE_ROUTER_ABI, ACCEPTED_TOKENS, MIN_PAYMENT_AMOUNT
 from .idempotency import MemoryIdempotencyStore
@@ -59,8 +60,9 @@ class PayNodeVerifier:
         except Exception as e:
             return {"isValid": False, "error": PayNodeException(ErrorCode.internal_error, details=str(e))}
 
+        # Wrap synchronous web3 calls in asyncio.to_thread to avoid blocking the event loop
         try:
-            receipt = self.w3.eth.get_transaction_receipt(tx_hash)
+            receipt = await asyncio.to_thread(self.w3.eth.get_transaction_receipt, tx_hash)
         except Exception:
             return {"isValid": False, "error": PayNodeException(ErrorCode.transaction_not_found)}
 
@@ -73,7 +75,7 @@ class PayNodeVerifier:
         contract = self.w3.eth.contract(address=Web3.to_checksum_address(self.contract_address), abi=PAYNODE_ROUTER_ABI)
         
         try:
-            logs = contract.events.PaymentReceived().process_receipt(receipt)
+            logs = await asyncio.to_thread(contract.events.PaymentReceived().process_receipt, receipt)
         except Exception:
             return {"isValid": False, "error": PayNodeException(ErrorCode.invalid_receipt)}
 

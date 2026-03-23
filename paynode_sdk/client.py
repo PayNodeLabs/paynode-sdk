@@ -6,7 +6,7 @@ from eth_account.messages import encode_typed_data
 from web3 import Web3
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
-from .constants import PAYNODE_ROUTER_ADDRESS, BASE_USDC_ADDRESS, BASE_USDC_DECIMALS, BASE_RPC_URLS
+from .constants import PAYNODE_ROUTER_ADDRESS, BASE_USDC_ADDRESS, BASE_USDC_DECIMALS, BASE_RPC_URLS, ACCEPTED_TOKENS
 from .errors import PayNodeException, ErrorCode
 
 logger = logging.getLogger("paynode_sdk.client")
@@ -95,6 +95,12 @@ class PayNodeAgentClient:
         # v1.3 Constraint: Min payment protection
         if amount_raw < 1000:
             raise PayNodeException(ErrorCode.amount_too_low)
+
+        # v1.4 Constraint: Token whitelist pre-flight (Anti-FakeToken)
+        resolved_chain_id = int(chain_id_header) if chain_id_header else 8453
+        whitelist = ACCEPTED_TOKENS.get(resolved_chain_id, [])
+        if whitelist and token_addr and token_addr.lower() not in [t.lower() for t in whitelist]:
+            raise PayNodeException(ErrorCode.token_not_accepted)
 
         # Protocol v1.3: Permit-First Execution
         try:
