@@ -7,7 +7,7 @@ from paynode_sdk import PayNodeAgentClient, PayNodeException, ErrorCode
 MOCK_PRIVATE_KEY = "0x" + "1" * 64
 MOCK_RPC = "https://sepolia.base.org"
 MOCK_MERCHANT = "0xMerchantWalletAddress789"
-MOCK_TOKEN = "0xeAC1f2C7099CdaFfB91Aa3b8Ffd653Ef16935798"
+MOCK_TOKEN = "0x109AEddD656Ed2761d1e210E179329105039c784"
 MOCK_ROUTER = "0xPayNodeRouterAddress123"
 MOCK_ORDER_ID = "order_12345"
 MOCK_TX_HASH = "0x6f3e1a..."
