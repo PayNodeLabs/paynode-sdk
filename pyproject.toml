@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "paynode-sdk-python"
-version = "1.4.0"
+version = "2.0.0"
 description = "PayNode Protocol Python SDK for AI Agents"
 readme = "README.md"
 authors = [{ name = "PayNodeLabs", email = "contact@paynode.dev" }]

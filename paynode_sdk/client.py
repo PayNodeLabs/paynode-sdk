@@ -1,21 +1,23 @@
 import time
 import logging
 import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import requests
+from urllib.parse import urlparse
 from eth_account.messages import encode_typed_data
 from web3 import Web3
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
-from .constants import PAYNODE_ROUTER_ADDRESS, BASE_USDC_ADDRESS, BASE_USDC_DECIMALS, BASE_RPC_URLS, ACCEPTED_TOKENS
+from .constants import PAYNODE_ROUTER_ADDRESS, BASE_USDC_ADDRESS, BASE_USDC_DECIMALS, BASE_RPC_URLS, ACCEPTED_TOKENS, MIN_PAYMENT_AMOUNT
 from .errors import PayNodeException, ErrorCode
 
 logger = logging.getLogger("paynode_sdk.client")
 
 class PayNodeAgentClient:
     """
-    The main PayNode Client for AI Agents (v1.1.1).
+    The main PayNode Client for AI Agents (v3.1).
     Automatically handles the x402 'Payment Required' handshake.
-    Supports RPC redundancy and EIP-2612 Permit-First payments.
+    Supports RPC redundancy, EIP-2612 Permit, and EIP-3009 Authorization.
     """
     def __init__(self, private_key: str, rpc_urls: list | str = BASE_RPC_URLS):
         self.rpc_urls = rpc_urls if isinstance(rpc_urls, list) else [rpc_urls]
@@ -37,16 +39,27 @@ class PayNodeAgentClient:
         self.session.mount("http://", adapter)
 
     def _init_w3(self):
-        """Finds a working RPC from the list."""
-        for rpc in self.rpc_urls:
+        """Finds a working RPC from the list concurrently (Faster initialization)."""
+        
+        def _check_rpc(rpc_url):
             try:
-                w3 = Web3(Web3.HTTPProvider(rpc, request_kwargs={'timeout': 5}))
-                if w3.is_connected():
-                    return w3
-            except Exception as e:
-                logger.warning(f"⚠️ [PayNode-PY] RPC {rpc} failed: {str(e)}")
-                continue
-        raise PayNodeException(ErrorCode.rpc_error)
+                temp_w3 = Web3(Web3.HTTPProvider(rpc_url, request_kwargs={'timeout': 3}))
+                if temp_w3.is_connected():
+                    return temp_w3
+                return None
+            except Exception:
+                return None
+
+        with ThreadPoolExecutor(max_workers=min(len(self.rpc_urls), 5)) as executor:
+            future_to_url = {executor.submit(_check_rpc, url): url for url in self.rpc_urls}
+            # Return the first one that succeeds
+            for future in as_completed(future_to_url):
+                w3_instance = future.result()
+                if w3_instance:
+                    logger.debug(f"⚡ [PayNode-PY] Connected to RPC: {future_to_url[future]}")
+                    return w3_instance
+                    
+        raise PayNodeException(ErrorCode.rpc_error, message="All provided RPC nodes are unreachable.")
 
     def request_gate(self, url: str, method: str = "GET", **kwargs):
         """The high-level autonomous method handling 402 loop."""
@@ -59,68 +72,181 @@ class PayNodeAgentClient:
         return self.request_gate(url, "POST", **kwargs)
 
     def _request_with_402_retry(self, method, url, max_retries=3, **kwargs):
+        response = None
         for _ in range(max_retries):
             response = self.session.request(method, url, **kwargs)
             if response.status_code == 402:
-                logger.info("💡 [PayNode-PY] 402 Detected. Handling payment...")
-                try:
-                    kwargs = self._handle_402(response.headers, **kwargs)
-                except Exception as e:
-                    if isinstance(e, PayNodeException): raise
-                    raise PayNodeException(ErrorCode.internal_error, message=f"An unexpected error occurred: {str(e)}")
-                continue
+                logger.info("💡 [PayNode-PY] 402 Detected. Analyzing protocol version...")
+                
+                # Check for x402 v2 (JSON body or X-402-Required header)
+                content_type = response.headers.get('Content-Type', '')
+                b64_required = response.headers.get('X-402-Required')
+                order_id = response.headers.get('X-402-Order-Id')
+                
+                body = None
+                if 'application/json' in content_type:
+                    try:
+                        body = response.json()
+                    except Exception as e:
+                        logger.debug(f"⚠️ [PayNode-PY] Failed to parse 402 JSON body: {e}")
+                
+                if not body and b64_required:
+                    try:
+                        import base64
+                        import json
+                        body = json.loads(base64.b64decode(b64_required).decode())
+                    except Exception as e:
+                        logger.warning(f"❌ [PayNode-PY] Failed to decode X-402-Required header: {e}")
+
+                if body and body.get('x402Version') == 2:
+                    logger.info("🚀 [PayNode-PY] x402 v2 detected. Handling autonomous payment...")
+                    if order_id: body['orderId'] = order_id
+                    kwargs = self._handle_x402_v2(body, **kwargs)
+                    continue
+
+                raise PayNodeException(ErrorCode.internal_error, message="Unsupported or malformed 402 response")
             return response
         return response
 
-    def _handle_402(self, headers, **kwargs):
-        router_addr = headers.get('x-paynode-contract')
-        merchant_addr = headers.get('x-paynode-merchant')
-        amount_raw = int(headers.get('x-paynode-amount', 0))
-        token_addr = headers.get('x-paynode-token-address')
-        order_id = headers.get('x-paynode-order-id')
-        currency = headers.get('x-paynode-currency', 'USDC')
-        chain_id_header = headers.get('x-paynode-chain-id')
+    def _handle_x402_v2(self, requirements, **kwargs):
+        chain_id = self.w3.eth.chain_id
+        caip2_chain_id = f"eip155:{chain_id}"
 
-        if not all([router_addr, merchant_addr, amount_raw, token_addr, order_id]):
-            raise PayNodeException(ErrorCode.internal_error, message="Malformed 402 headers: missing metadata")
+        # Select suitable requirement
+        requirement = next((req for req in requirements.get('accepts', []) 
+                         if req.get('network') == caip2_chain_id), None)
 
-        # Network safety check (v1.4)
-        if chain_id_header:
-            current_chain_id = self.w3.eth.chain_id
-            if int(chain_id_header) != current_chain_id:
-                raise PayNodeException(ErrorCode.invalid_receipt, message=f"Network mismatch: Current {current_chain_id}, Request {chain_id_header}.")
+        if not requirement:
+            raise PayNodeException(ErrorCode.internal_error, message=f"No compatible payment requirement found for network {caip2_chain_id}")
 
-        logger.info(f"💡 [PayNode-PY] Payment request: {amount_raw} {currency} to {merchant_addr}")
+        logger.info(f"💡 [PayNode-PY] Payment request (v2): {requirement['amount']} atomic units of {requirement['asset']} to {requirement['payTo']}")
+        
+        # Dust limit check
+        if int(requirement['amount']) < MIN_PAYMENT_AMOUNT:
+            raise PayNodeException(ErrorCode.amount_too_low, message=f"Payment amount {requirement['amount']} is below the minimum dust limit of {MIN_PAYMENT_AMOUNT}")
 
-        # v1.3 Constraint: Min payment protection
-        if amount_raw < 1000:
-            raise PayNodeException(ErrorCode.amount_too_low)
+        order_id = requirement.get('orderId') or requirements.get('orderId') or urlparse(kwargs.get('url', '')).path
+        
+        payload_data = {}
+        ptype = requirement.get('type', 'onchain')
 
-        # v1.4 Constraint: Token whitelist pre-flight (Anti-FakeToken)
-        resolved_chain_id = int(chain_id_header) if chain_id_header else 8453
-        whitelist = ACCEPTED_TOKENS.get(resolved_chain_id, [])
-        if whitelist and token_addr and token_addr.lower() not in [t.lower() for t in whitelist]:
-            raise PayNodeException(ErrorCode.token_not_accepted)
+        if ptype == 'eip3009':
+            valid_after = int(time.time()) - 60
+            valid_before = int(time.time()) + requirement.get('maxTimeoutSeconds', 3600)
+            import os
+            nonce = "0x" + os.urandom(32).hex()
 
-        # Protocol v1.3: Permit-First Execution
-        try:
-            # Check allowance first to decide if we need Permit
-            allowance = self._get_allowance(token_addr, router_addr)
-            if allowance >= amount_raw:
-                tx_hash = self._execute_pay(router_addr, token_addr, merchant_addr, amount_raw, order_id)
+            try:
+                payload_data = self.sign_transfer_with_authorization(
+                    requirement['asset'],
+                    requirement['payTo'],
+                    int(requirement['amount']),
+                    valid_after,
+                    valid_before,
+                    nonce,
+                    requirement.get('extra', {})
+                )
+            except Exception as e:
+                raise PayNodeException(ErrorCode.transaction_failed, message="Failed to sign payment authorization", details=e)
+        else:
+            # type: 'onchain'
+            router_addr = requirement.get('router')
+            if not router_addr:
+                raise PayNodeException(ErrorCode.internal_error, message="On-chain payment required but no router address provided.")
+
+            logger.info(f"⚡ [PayNode-PY] Executing on-chain payment to {requirement['payTo']}...")
+            amount = int(requirement['amount'])
+            asset = requirement['asset']
+            allowance = self._get_allowance(asset, router_addr)
+
+            if allowance >= amount:
+                tx_hash = self.pay(router_addr, asset, requirement['payTo'], amount, order_id)
             else:
-                logger.info("⚡ [PayNode-PY] Insufficient allowance. Attempting Permit-First payment...")
-                tx_hash = self.pay_with_permit(router_addr, token_addr, merchant_addr, amount_raw, order_id)
+                tx_hash = self.pay_with_permit(router_addr, asset, requirement['payTo'], amount, order_id)
             
-            logger.info(f"✅ [PayNode-PY] Payment successful: {tx_hash}")
-        except Exception as e:
-            if isinstance(e, PayNodeException): raise
-            raise PayNodeException(ErrorCode.transaction_failed, details=e)
+            payload_data = {"txHash": tx_hash}
+
+        # Unified Payload for v3.1
+        payment_payload = {
+            "version": "3.1",
+            "type": ptype,
+            "orderId": order_id,
+            "payload": payload_data
+        }
+
+        logger.info(f"✅ [PayNode-PY] {ptype} payment prepared. Retrying request...")
+        
+        import json
+        import base64
+        b64_payload = base64.b64encode(json.dumps(payment_payload).encode()).decode()
 
         retry_headers = kwargs.get('headers', {}).copy()
-        retry_headers.update({'x-paynode-receipt': tx_hash, 'x-paynode-order-id': order_id})
+        retry_headers.update({
+            'Content-Type': 'application/json',
+            'X-402-Payload': b64_payload,
+            'X-402-Order-Id': order_id
+        })
         kwargs['headers'] = retry_headers
         return kwargs
+
+    def sign_transfer_with_authorization(self, token_addr, to, amount, valid_after, valid_before, nonce, extra=None):
+        extra = extra or {}
+        token_addr = Web3.to_checksum_address(token_addr)
+        to = Web3.to_checksum_address(to)
+        
+        domain = {
+            "name": extra.get("name", "USD Coin"),
+            "version": extra.get("version", "2"),
+            "chainId": self.w3.eth.chain_id,
+            "verifyingContract": token_addr,
+        }
+        
+        types = {
+            "EIP712Domain": [
+                {"name": "name", "type": "string"},
+                {"name": "version", "type": "string"},
+                {"name": "chainId", "type": "uint256"},
+                {"name": "verifyingContract", "type": "address"},
+            ],
+            "TransferWithAuthorization": [
+                {"name": "from", "type": "address"},
+                {"name": "to", "type": "address"},
+                {"name": "value", "type": "uint256"},
+                {"name": "validAfter", "type": "uint256"},
+                {"name": "validBefore", "type": "uint256"},
+                {"name": "nonce", "type": "bytes32"},
+            ],
+        }
+        
+        message = {
+            "from": self.account.address,
+            "to": to,
+            "value": int(amount),
+            "validAfter": int(valid_after),
+            "validBefore": int(valid_before),
+            "nonce": Web3.to_bytes(hexstr=nonce),
+        }
+        
+        structured_data = {
+            "types": types,
+            "domain": domain,
+            "primaryType": "TransferWithAuthorization",
+            "message": message,
+        }
+        
+        signed = self.account.sign_typed_data(full_message=structured_data)
+        
+        return {
+            "signature": signed.signature.hex(),
+            "authorization": {
+                "from": self.account.address,
+                "to": to,
+                "value": str(amount),
+                "validAfter": str(valid_after),
+                "validBefore": str(valid_before),
+                "nonce": nonce
+            }
+        }
 
     def _get_allowance(self, token_addr, spender_addr):
         abi = [{"constant": True, "inputs": [{"name": "o", "type": "address"}, {"name": "s", "type": "address"}], "name": "allowance", "outputs": [{"name": "", "type": "uint256"}], "type": "function"}]
@@ -128,14 +254,12 @@ class PayNodeAgentClient:
         return token.functions.allowance(self.account.address, Web3.to_checksum_address(spender_addr)).call()
 
     def sign_permit(self, token_addr, spender_addr, amount, deadline=None):
-        """Signs EIP-2612 Permit data."""
         if deadline is None:
             deadline = int(time.time()) + 3600
         
         token_addr = Web3.to_checksum_address(token_addr)
         spender_addr = Web3.to_checksum_address(spender_addr)
         
-        # Get nonce and domain separator
         abi = [
             {"inputs": [{"name": "o", "type": "address"}], "name": "nonces", "outputs": [{"name": "", "type": "uint256"}], "stateMutability": "view", "type": "function"},
             {"inputs": [], "name": "name", "outputs": [{"name": "", "type": "string"}], "stateMutability": "view", "type": "function"}
@@ -145,93 +269,46 @@ class PayNodeAgentClient:
         name = token.functions.name().call()
         chain_id = self.w3.eth.chain_id
 
-        domain = {
-            "name": name,
-            "version": "1",
-            "chainId": chain_id,
-            "verifyingContract": token_addr,
-        }
-        message = {
-            "owner": self.account.address,
-            "spender": spender_addr,
-            "value": amount,
-            "nonce": nonce,
-            "deadline": deadline,
-        }
+        domain = {"name": name, "version": "1", "chainId": chain_id, "verifyingContract": token_addr}
+        message = {"owner": self.account.address, "spender": spender_addr, "value": amount, "nonce": nonce, "deadline": deadline}
         types = {
             "EIP712Domain": [
-                {"name": "name", "type": "string"},
-                {"name": "version", "type": "string"},
-                {"name": "chainId", "type": "uint256"},
-                {"name": "verifyingContract", "type": "address"},
+                {"name": "name", "type": "string"}, {"name": "version", "type": "string"},
+                {"name": "chainId", "type": "uint256"}, {"name": "verifyingContract", "type": "address"},
             ],
             "Permit": [
-                {"name": "owner", "type": "address"},
-                {"name": "spender", "type": "address"},
-                {"name": "value", "type": "uint256"},
-                {"name": "nonce", "type": "uint256"},
+                {"name": "owner", "type": "address"}, {"name": "spender", "type": "address"},
+                {"name": "value", "type": "uint256"}, {"name": "nonce", "type": "uint256"},
                 {"name": "deadline", "type": "uint256"},
             ],
         }
-        
-        structured_data = {
-            "types": types,
-            "domain": domain,
-            "primaryType": "Permit",
-            "message": message,
-        }
-        
+        structured_data = {"types": types, "domain": domain, "primaryType": "Permit", "message": message}
         signed = self.account.sign_typed_data(full_message=structured_data)
-        return {
-            "v": signed.v,
-            "r": Web3.to_bytes(signed.r).rjust(32, b'\0'),
-            "s": Web3.to_bytes(signed.s).rjust(32, b'\0'),
-            "deadline": deadline
-        }
+        return {"v": signed.v, "r": Web3.to_bytes(signed.r).rjust(32, b'\0'), "s": Web3.to_bytes(signed.s).rjust(32, b'\0'), "deadline": deadline}
 
     def pay_with_permit(self, router_addr, token_addr, merchant_addr, amount, order_id):
-        """Combines sign_permit and on-chain submission."""
         sig = self.sign_permit(token_addr, router_addr, amount)
         router_abi = [{"inputs": [{"name": "payer", "type": "address"}, {"name": "token", "type": "address"}, {"name": "merchant", "type": "address"}, {"name": "amount", "type": "uint256"}, {"name": "orderId", "type": "bytes32"}, {"name": "deadline", "type": "uint256"}, {"name": "v", "type": "uint8"}, {"name": "r", "type": "bytes32"}, {"name": "s", "type": "bytes32"}], "name": "payWithPermit", "outputs": [], "stateMutability": "nonpayable", "type": "function"}]
         router = self.w3.eth.contract(address=Web3.to_checksum_address(router_addr), abi=router_abi)
         order_id_bytes = self.w3.keccak(text=order_id)
-        
         current_gas_price = int(self.w3.eth.gas_price * 1.2)
         with self.nonce_lock:
             nonce = self.w3.eth.get_transaction_count(self.account.address, 'pending')
-            tx = router.functions.payWithPermit(
-                self.account.address,
-                Web3.to_checksum_address(token_addr),
-                Web3.to_checksum_address(merchant_addr),
-                amount,
-                order_id_bytes,
-                sig["deadline"], sig["v"], sig["r"], sig["s"]
-            ).build_transaction({
-                'from': self.account.address,
-                'nonce': nonce,
-                'gas': 300000,
-                'gasPrice': current_gas_price
-            })
+            tx = router.functions.payWithPermit(self.account.address, Web3.to_checksum_address(token_addr), Web3.to_checksum_address(merchant_addr), amount, order_id_bytes, sig["deadline"], sig["v"], sig["r"], sig["s"]).build_transaction({'from': self.account.address, 'nonce': nonce, 'gas': 300000, 'gasPrice': current_gas_price})
             signed_tx = self.account.sign_transaction(tx)
             tx_h = self.w3.eth.send_raw_transaction(signed_tx.raw_transaction)
-        
         self.w3.eth.wait_for_transaction_receipt(tx_h, timeout=60)
         return self.w3.to_hex(tx_h)
 
-    def _execute_pay(self, router_addr, token_addr, merchant_addr, amount, order_id):
-        """Standard pay method (fallback)."""
+    def pay(self, router_addr, token_addr, merchant_addr, amount, order_id):
         router_abi = [{"inputs": [{"name": "token", "type": "address"}, {"name": "merchant", "type": "address"}, {"name": "amount", "type": "uint256"}, {"name": "orderId", "type": "bytes32"}], "name": "pay", "outputs": [], "stateMutability": "nonpayable", "type": "function"}]
         router = self.w3.eth.contract(address=Web3.to_checksum_address(router_addr), abi=router_abi)
         order_id_bytes = self.w3.keccak(text=order_id)
         current_gas_price = int(self.w3.eth.gas_price * 1.2)
-        
         with self.nonce_lock:
             nonce = self.w3.eth.get_transaction_count(self.account.address, 'pending')
-            tx = router.functions.pay(Web3.to_checksum_address(token_addr), Web3.to_checksum_address(merchant_addr), amount, order_id_bytes).build_transaction({
-                'from': self.account.address, 'nonce': nonce, 'gas': 200000, 'gasPrice': current_gas_price
-            })
+            tx = router.functions.pay(Web3.to_checksum_address(token_addr), Web3.to_checksum_address(merchant_addr), amount, order_id_bytes).build_transaction({'from': self.account.address, 'nonce': nonce, 'gas': 200000, 'gasPrice': current_gas_price})
             signed_tx = self.account.sign_transaction(tx)
             tx_h = self.w3.eth.send_raw_transaction(signed_tx.raw_transaction)
-        
         self.w3.eth.wait_for_transaction_receipt(tx_h, timeout=60)
         return self.w3.to_hex(tx_h)

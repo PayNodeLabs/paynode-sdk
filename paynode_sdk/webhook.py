@@ -100,7 +100,7 @@ class PayNodeWebhookNotifier:
             raise ValueError("webhook_secret is required")
 
         self.contract_address = contract_address or PAYNODE_ROUTER_ADDRESS
-        self.w3 = Web3(Web3.HTTPProvider(rpc_url, request_kwargs={"timeout": 10}))
+        self.w3 = Web3(Web3.HTTPProvider(rpc_url, request_kwargs={"timeout": 3}))
         self.contract = self.w3.eth.contract(
             address=Web3.to_checksum_address(self.contract_address),
             abi=PAYNODE_ROUTER_ABI
@@ -120,7 +120,7 @@ class PayNodeWebhookNotifier:
     async def start(self, from_block: Optional[int] = None) -> None:
         """Start polling for PaymentReceived events."""
         if self._running:
-            logger.warning("[PayNode Webhook] Already running.")
+            logger.warning("🔔 [PayNode Webhook] Already running.")
             return
 
         self._last_block = from_block if from_block is not None else self.w3.eth.block_number
@@ -158,7 +158,7 @@ class PayNodeWebhookNotifier:
 
                     self._last_block = current_block
             except Exception as e:
-                logger.error(f"[PayNode Webhook] Poll error: {e}")
+                logger.error(f"❌ [PayNode Webhook] Poll error: {e}")
 
             await asyncio.sleep(self.poll_interval)
 
@@ -179,7 +179,7 @@ class PayNodeWebhookNotifier:
                 timestamp=time.time(),
             )
         except Exception as e:
-            logger.error(f"[PayNode Webhook] Failed to parse event: {e}")
+            logger.error(f"❌ [PayNode Webhook] Failed to parse event: {e}")
             return None
 
     async def _deliver(self, event: PaymentEvent, attempt: int = 1) -> None:
@@ -221,13 +221,13 @@ class PayNodeWebhookNotifier:
                         self.on_success(event)
 
         except Exception as e:
-            logger.error(f"[PayNode Webhook] Delivery failed (attempt {attempt}/{MAX_RETRIES}): {e}")
+            logger.error(f"⚠️ [PayNode Webhook] Delivery failed (attempt {attempt}/{MAX_RETRIES}): {e}")
 
             if attempt < MAX_RETRIES:
                 backoff = (2 ** attempt)  # 2s, 4s, 8s
                 await asyncio.sleep(backoff)
                 return await self._deliver(event, attempt + 1)
 
-            logger.error(f"[PayNode Webhook] Gave up on tx {event.tx_hash} after {MAX_RETRIES} attempts.")
+            logger.error(f"❌ [PayNode Webhook] Gave up on tx {event.tx_hash} after {MAX_RETRIES} attempts.")
             if self.on_error:
                 self.on_error(e, event)
