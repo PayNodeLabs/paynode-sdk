@@ -28,7 +28,7 @@ ERROR_MESSAGES = {
     ErrorCode.transaction_not_found: "Transaction not found on-chain.",
     ErrorCode.wrong_contract: "Payment event was not emitted by the official PayNode contract.",
     ErrorCode.order_mismatch: "OrderId in receipt does not match requested ID.",
-    ErrorCode.missing_receipt: "Please pay to PayNode contract and provide 'x-paynode-receipt' header.",
+    ErrorCode.missing_receipt: "Please pay to PayNode contract and provide 'X-402-Payload' header.",
 }
 
 class PayNodeException(Exception):

@@ -33,21 +33,26 @@ async def get_premium_data(request: Request):
     If this route is reached, it means the middleware has already 
     verified the on-chain payment.
     """
-    receipt = request.headers.get('x-paynode-receipt')
-    order_id = request.headers.get('x-paynode-order-id')
+    paynode_state = request.state.paynode
+    unified_payload = paynode_state.get("unified_payload", {})
+    order_id = paynode_state.get("order_id")
     
-    print(f"✅ [Py-PayNode] Payment Verified. Tx: {receipt}, Order: {order_id}")
+    tx_hash = unified_payload.get("payload", {}).get("txHash") or unified_payload.get("payload", {}).get("signature", "unknown")
+    payment_type = unified_payload.get("type", "unknown")
+    
+    print(f"✅ [Py-PayNode] Payment Verified. Tx: {tx_hash}, Order: {order_id}, Type: {payment_type}")
     
     return {
         "status": "success",
         "data": {
             "message": "Premium content served by PayNode-Python SDK.",
             "secret_code": "AGENTIC_BASE_SUMMIT_2026",
-            "timestamp": "2026-03-22T19:41:09+08:00" # Placeholder or dynamic
+            "timestamp": "2026-03-22T19:41:09+08:00"
         },
         "payment_info": {
-            "receipt": receipt,
-            "order_id": order_id
+            "receipt": tx_hash,
+            "order_id": order_id,
+            "payment_type": payment_type
         }
     }
 
