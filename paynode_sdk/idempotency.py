@@ -18,27 +18,38 @@ class IdempotencyStore(ABC):
         """
         pass
 
+import threading
+
 class MemoryIdempotencyStore(IdempotencyStore):
     def __init__(self):
         self.cache: Dict[str, float] = {}
+        self.last_cleanup = time.time()
+        self.lock = threading.Lock()
 
     async def check_and_set(self, tx_hash: str, ttl_seconds: int) -> bool:
-        now = time.time()
-        expiry = self.cache.get(tx_hash)
+        with self.lock:
+            now = time.time()
+            expiry = self.cache.get(tx_hash)
 
-        if expiry and expiry > now:
-            return False
+            if expiry and expiry > now:
+                return False
 
-        self.cache[tx_hash] = now + ttl_seconds
-        self._cleanup()
-        return True
+            self.cache[tx_hash] = now + ttl_seconds
+            
+            # BUG-5 FIX: Only cleanup periodically to avoid O(n) overhead on every call.
+            if now - self.last_cleanup > 60:
+                self._cleanup()
+                self.last_cleanup = now
+                
+            return True
 
     async def delete(self, tx_hash: str) -> None:
-        self.cache.pop(tx_hash, None)
+        with self.lock:
+            self.cache.pop(tx_hash, None)
 
     def _cleanup(self):
+        # Already inside lock when called from check_and_set
         now = time.time()
-        # Simple cleanup logic: remove expired entries
         expired_keys = [k for k, v in self.cache.items() if v <= now]
         for k in expired_keys:
             del self.cache[k]

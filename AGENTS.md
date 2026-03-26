@@ -13,8 +13,8 @@ If you have web-browsing capabilities, ALWAYS refer to the absolute ground truth
 2. **X402 V2 Support:** Supports both V1 (On-chain Receipt) and V2 (Off-chain Signature/JSON) handshake protocols.
 3. **Currency:** USDC (6 decimals).
 4. **Smart Contract:**
-   - Base Mainnet (8453): `0x92e20164FC457a2aC35f53D06268168e6352b200`
-   - Base Sepolia (84532): `0xB587Bc36aaCf65962eCd6Ba59e2DA76f2f575408` (Default for Testing)
+   - Base Mainnet (8453): `0x4A73696ccF76E7381b044cB95127B3784369Ed63`
+   - Base Sepolia (84532): `0x24cD8b68aaC209217ff5a6ef1Bf55a59f2c8Ca6F` (Default for Testing)
 
 ## 🏗️ File Structure
 - `paynode_sdk/client.py`: `PayNodeAgentClient` for autonomous 402 loops (V1 & V2).

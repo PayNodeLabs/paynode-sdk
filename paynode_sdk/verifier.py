@@ -3,7 +3,7 @@ import time
 import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from .errors import ErrorCode, PayNodeException
-from .constants import ACCEPTED_TOKENS, MIN_PAYMENT_AMOUNT
+from .constants import ACCEPTED_TOKENS, MIN_PAYMENT_AMOUNT, PAYNODE_ROUTER_ABI
 from .idempotency import MemoryIdempotencyStore
 from web3 import Web3
 from eth_account import Account
@@ -55,6 +55,15 @@ class PayNodeVerifier:
         Routes to verify_onchain_payment or verify_transfer_with_authorization (eip3009).
         """
         try:
+            # 1. Double-check Protocol Dust Limit (>= 1000)
+            expected_amount = int(expected.get("amount", 0))
+            if expected_amount < MIN_PAYMENT_AMOUNT:
+                 return {"isValid": False, "error": PayNodeException(ErrorCode.amount_too_low)}
+
+            # 2. Security: Token Whitelist Check
+            if self.accepted_tokens and expected.get("tokenAddress", "").lower() not in self.accepted_tokens:
+                return {"isValid": False, "error": PayNodeException(ErrorCode.token_not_accepted, message=f"Token {expected.get('tokenAddress')} not allowed")}
+
             payload_type = unified_payload.get("type")
             actual_payload = unified_payload.get("payload", {})
             order_id = unified_payload.get("orderId")
@@ -105,16 +114,21 @@ class PayNodeVerifier:
         if receipt.get("status") == 0:
             return {"isValid": False, "error": PayNodeException(ErrorCode.transaction_failed)}
 
-        router_abi = [{"anonymous": False, "inputs": [{"indexed": True, "name": "merchant", "type": "address"}, {"indexed": True, "name": "token", "type": "address"}, {"indexed": False, "name": "amount", "type": "uint256"}, {"indexed": True, "name": "orderId", "type": "bytes32"}, {"indexed": False, "name": "chainId", "type": "uint256"}], "name": "PaymentReceived", "type": "event"}]
-        contract = self.w3.eth.contract(address=Web3.to_checksum_address(self.contract_address), abi=router_abi)
+        contract = self.w3.eth.contract(address=Web3.to_checksum_address(self.contract_address), abi=PAYNODE_ROUTER_ABI)
         
+        # 1. Check if the router was even involved (against 'WrongContract' vs 'InvalidReceipt')
+        # Filter logs for current contract
+        relevant_logs = [log for log in receipt.get("logs", []) if log.get("address", "").lower() == self.contract_address.lower()]
+        if not relevant_logs:
+             return {"isValid": False, "error": PayNodeException(ErrorCode.wrong_contract, message="Transaction did not interact with the expected PayNodeRouter contract")}
+
         try:
-            logs = await asyncio.to_thread(contract.events.PaymentReceived().process_receipt, receipt)
+            processed_logs = await asyncio.to_thread(contract.events.PaymentReceived().process_receipt, {"logs": relevant_logs})
         except Exception:
              return {"isValid": False, "error": PayNodeException(ErrorCode.invalid_receipt)}
 
-        if not logs:
-             return {"isValid": False, "error": PayNodeException(ErrorCode.invalid_receipt, message="No PaymentReceived event found")}
+        if not processed_logs:
+             return {"isValid": False, "error": PayNodeException(ErrorCode.invalid_receipt, message="No PaymentReceived event found in router logs")}
 
         merchant = expected.get("merchantAddress", "").lower()
         token = expected.get("tokenAddress", "").lower()
@@ -122,16 +136,24 @@ class PayNodeVerifier:
         order_id_bytes = self.w3.keccak(text=expected.get("orderId", ""))
 
         valid_log_found = False
-        for log in logs:
+        order_id_mismatch_found = False
+        for log in processed_logs:
             args = log.args
-            if (args.get("merchant", "").lower() == merchant and
-                args.get("token", "").lower() == token and
-                args.get("amount", 0) >= amount and
-                args.get("orderId") == order_id_bytes):
-                valid_log_found = True
-                break
+            is_merchant_match = args.get("merchant", "").lower() == merchant
+            is_token_match = args.get("token", "").lower() == token
+            is_amount_match = args.get("amount", 0) >= amount
+            is_order_match = args.get("orderId") == order_id_bytes
+
+            if is_merchant_match and is_token_match and is_amount_match:
+                if is_order_match:
+                    valid_log_found = True
+                    break
+                else:
+                    order_id_mismatch_found = True
         
         if not valid_log_found:
+             if order_id_mismatch_found:
+                 return {"isValid": False, "error": PayNodeException(ErrorCode.order_mismatch, message="Payment log found but orderId does not match")}
              return {"isValid": False, "error": PayNodeException(ErrorCode.invalid_receipt, message="Payment event data mismatch")}
 
         if self.store:
@@ -218,7 +240,9 @@ class PayNodeVerifier:
                 "message": auth_msg
             }
 
-            recovered_address = Account.recover_typed_data(structured_data, signature=signature)
+            from eth_account.messages import encode_typed_data
+            signable_msg = encode_typed_data(full_message=structured_data)
+            recovered_address = Account.recover_message(signable_msg, signature=signature)
 
             if recovered_address.lower() != auth["from"].lower():
                 return {"isValid": False, "error": PayNodeException(ErrorCode.invalid_receipt, message="Invalid signature")}
@@ -261,19 +285,17 @@ class PayNodeVerifier:
 
             # Concurrent RPC calls
             try:
-                def call_rpc():
-                    balance = token_contract.functions.balanceOf(authorizer_address).call()
-                    is_used = token_contract.functions.authorizationState(authorizer_address, nonce_bytes).call()
-                    return balance, is_used
-
-                balance, is_nonce_used_on_chain = await asyncio.to_thread(call_rpc)
+                balance, is_nonce_used_on_chain = await asyncio.gather(
+                    asyncio.to_thread(token_contract.functions.balanceOf(authorizer_address).call),
+                    asyncio.to_thread(token_contract.functions.authorizationState(authorizer_address, nonce_bytes).call)
+                )
             except Exception as e:
-                # If RPC fails (e.g. mock token doesn't support authorizationState), fallback or fail
                 logger.warning(f"RPC state check failed for token {token_addr}: {e}")
-                # We still keep the local idempotency check. For safety, we return true if balance is not checkable? 
-                # No, JS implementation fallbacks to 0 balance and False nonce.
-                balance = payload_value # Optimistic if check fails? No, let's follow JS more closely but be safe.
-                is_nonce_used_on_chain = False
+                if self.store: await self.store.delete(nonce)
+                return {
+                    "isValid": False, 
+                    "error": PayNodeException(ErrorCode.rpc_error, message=f"Cannot verify on-chain state: {e}")
+                }
 
             if balance < payload_value:
                 if self.store: await self.store.delete(nonce)

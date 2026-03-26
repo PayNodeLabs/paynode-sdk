@@ -8,7 +8,7 @@ from eth_account.messages import encode_typed_data
 from web3 import Web3
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
-from .constants import PAYNODE_ROUTER_ADDRESS, BASE_USDC_ADDRESS, BASE_USDC_DECIMALS, BASE_RPC_URLS, ACCEPTED_TOKENS, MIN_PAYMENT_AMOUNT
+from .constants import PAYNODE_ROUTER_ADDRESS, BASE_USDC_ADDRESS, BASE_USDC_DECIMALS, BASE_RPC_URLS, ACCEPTED_TOKENS, MIN_PAYMENT_AMOUNT, PAYNODE_ROUTER_ABI
 from .errors import PayNodeException, ErrorCode
 
 logger = logging.getLogger("paynode_sdk.client")
@@ -22,6 +22,7 @@ class PayNodeAgentClient:
     def __init__(self, private_key: str, rpc_urls: list | str = BASE_RPC_URLS):
         self.rpc_urls = rpc_urls if isinstance(rpc_urls, list) else [rpc_urls]
         self.w3 = self._init_w3()
+        self.current_rpc_index = 0
         
         # Initialize account and discard private key string
         self.account = self.w3.eth.account.from_key(private_key)
@@ -61,6 +62,24 @@ class PayNodeAgentClient:
                     
         raise PayNodeException(ErrorCode.rpc_error, message="All provided RPC nodes are unreachable.")
 
+    def _rotate_rpc(self):
+        """Switches to the next available RPC node in the list."""
+        self.current_rpc_index = (self.current_rpc_index + 1) % len(self.rpc_urls)
+        new_url = self.rpc_urls[self.current_rpc_index]
+        logger.warning(f"⚠️ [PayNode-PY] RPC failure detected. Rotating to: {new_url}")
+        self.w3 = Web3(Web3.HTTPProvider(new_url, request_kwargs={'timeout': 10}))
+
+    def _call_with_failover(self, func, *args, **kwargs):
+        """Wrapper to retry a web3 call with RPC failover."""
+        for attempt in range(len(self.rpc_urls)):
+            try:
+                return func(*args, **kwargs)
+            except Exception as e:
+                if attempt < len(self.rpc_urls) - 1:
+                    self._rotate_rpc()
+                else:
+                    raise e
+
     def request_gate(self, url: str, method: str = "GET", **kwargs):
         """The high-level autonomous method handling 402 loop."""
         return self._request_with_402_retry(method.upper(), url, **kwargs)
@@ -71,12 +90,12 @@ class PayNodeAgentClient:
     def post(self, url, **kwargs):
         return self.request_gate(url, "POST", **kwargs)
 
-    def _request_with_402_retry(self, method, url, max_retries=3, **kwargs):
+    def _request_with_402_retry(self, method: str, url: str, max_retries: int = 3, **kwargs) -> requests.Response:
         response = None
-        for _ in range(max_retries):
+        for attempt in range(max_retries):
             response = self.session.request(method, url, **kwargs)
             if response.status_code == 402:
-                logger.info("💡 [PayNode-PY] 402 Detected. Analyzing protocol version...")
+                logger.info(f"💡 [PayNode-PY] 402 Detected (Attempt {attempt+1}/{max_retries}). Analyzing protocol version...")
                 
                 # Check for x402 v2 (JSON body or X-402-Required header)
                 content_type = response.headers.get('Content-Type', '')
@@ -101,14 +120,22 @@ class PayNodeAgentClient:
                 if body and body.get('x402Version') == 2:
                     logger.info("🚀 [PayNode-PY] x402 v2 detected. Handling autonomous payment...")
                     if order_id: body['orderId'] = order_id
-                    kwargs = self._handle_x402_v2(body, **kwargs)
+                    kwargs = self._handle_x402_v2(url, body, **kwargs)
                     continue
 
                 raise PayNodeException(ErrorCode.internal_error, message="Unsupported or malformed 402 response")
+            
             return response
+
+        if response and response.status_code == 402:
+            raise PayNodeException(ErrorCode.internal_error, message="Still 402 after all payment attempts. The server may have rejected the payment or authorization.")
         return response
 
-    def _handle_x402_v2(self, requirements, **kwargs):
+    def _handle_x402_v2(self, url: str, requirements: dict, **kwargs) -> dict:
+        """
+        Internal handler for X402 V2/V3.1 protocol.
+        Analyzes requirements, executes payment, and returns updated kwargs for retrying the request.
+        """
         chain_id = self.w3.eth.chain_id
         caip2_chain_id = f"eip155:{chain_id}"
 
@@ -119,13 +146,18 @@ class PayNodeAgentClient:
         if not requirement:
             raise PayNodeException(ErrorCode.internal_error, message=f"No compatible payment requirement found for network {caip2_chain_id}")
 
+        # 🛡️ Token Whitelist Check
+        chain_tokens = ACCEPTED_TOKENS.get(chain_id, [])
+        if chain_tokens and requirement.get('asset').lower() not in [t.lower() for t in chain_tokens]:
+            raise PayNodeException(ErrorCode.token_not_accepted, message=f"Token {requirement['asset']} is not in the whitelist for chain {chain_id}")
+
         logger.info(f"💡 [PayNode-PY] Payment request (v2): {requirement['amount']} atomic units of {requirement['asset']} to {requirement['payTo']}")
         
         # Dust limit check
         if int(requirement['amount']) < MIN_PAYMENT_AMOUNT:
             raise PayNodeException(ErrorCode.amount_too_low, message=f"Payment amount {requirement['amount']} is below the minimum dust limit of {MIN_PAYMENT_AMOUNT}")
 
-        order_id = requirement.get('orderId') or requirements.get('orderId') or urlparse(kwargs.get('url', '')).path
+        order_id = requirement.get('orderId') or requirements.get('orderId') or urlparse(url).path
         
         payload_data = {}
         ptype = requirement.get('type', 'onchain')
@@ -160,9 +192,13 @@ class PayNodeAgentClient:
             allowance = self._get_allowance(asset, router_addr)
 
             if allowance >= amount:
-                tx_hash = self.pay(router_addr, asset, requirement['payTo'], amount, order_id)
+                try:
+                    tx_hash = self.pay(router_addr, asset, requirement['payTo'], amount, order_id)
+                except Exception as e:
+                    logger.warning(f"⚠️ [PayNode-PY] Direct pay failed (possibly allowance race), falling back to permit: {e}")
+                    tx_hash = self.pay_with_permit(router_addr, asset, requirement['payTo'], amount, order_id, version=requirement.get('extra', {}).get('version', '2'))
             else:
-                tx_hash = self.pay_with_permit(router_addr, asset, requirement['payTo'], amount, order_id)
+                tx_hash = self.pay_with_permit(router_addr, asset, requirement['payTo'], amount, order_id, version=requirement.get('extra', {}).get('version', '2'))
             
             payload_data = {"txHash": tx_hash}
 
@@ -249,11 +285,14 @@ class PayNodeAgentClient:
         }
 
     def _get_allowance(self, token_addr, spender_addr):
+        return self._call_with_failover(self.__get_allowance_raw, token_addr, spender_addr)
+
+    def __get_allowance_raw(self, token_addr, spender_addr):
         abi = [{"constant": True, "inputs": [{"name": "o", "type": "address"}, {"name": "s", "type": "address"}], "name": "allowance", "outputs": [{"name": "", "type": "uint256"}], "type": "function"}]
         token = self.w3.eth.contract(address=Web3.to_checksum_address(token_addr), abi=abi)
         return token.functions.allowance(self.account.address, Web3.to_checksum_address(spender_addr)).call()
 
-    def sign_permit(self, token_addr, spender_addr, amount, deadline=None):
+    def sign_permit(self, token_addr: str, spender_addr: str, amount: int, deadline: int = None, version: str = "2"):
         if deadline is None:
             deadline = int(time.time()) + 3600
         
@@ -269,7 +308,7 @@ class PayNodeAgentClient:
         name = token.functions.name().call()
         chain_id = self.w3.eth.chain_id
 
-        domain = {"name": name, "version": "1", "chainId": chain_id, "verifyingContract": token_addr}
+        domain = {"name": name, "version": version, "chainId": chain_id, "verifyingContract": token_addr}
         message = {"owner": self.account.address, "spender": spender_addr, "value": amount, "nonce": nonce, "deadline": deadline}
         types = {
             "EIP712Domain": [
@@ -284,12 +323,19 @@ class PayNodeAgentClient:
         }
         structured_data = {"types": types, "domain": domain, "primaryType": "Permit", "message": message}
         signed = self.account.sign_typed_data(full_message=structured_data)
-        return {"v": signed.v, "r": Web3.to_bytes(signed.r).rjust(32, b'\0'), "s": Web3.to_bytes(signed.s).rjust(32, b'\0'), "deadline": deadline}
+        
+        # NOTE: r/s padding to 32 bytes ensures bytes32 compatibility
+        r_bytes = Web3.to_bytes(signed.r).rjust(32, b'\0')
+        s_bytes = Web3.to_bytes(signed.s).rjust(32, b'\0')
+        
+        return {"v": signed.v, "r": r_bytes, "s": s_bytes, "deadline": deadline}
 
-    def pay_with_permit(self, router_addr, token_addr, merchant_addr, amount, order_id):
-        sig = self.sign_permit(token_addr, router_addr, amount)
-        router_abi = [{"inputs": [{"name": "payer", "type": "address"}, {"name": "token", "type": "address"}, {"name": "merchant", "type": "address"}, {"name": "amount", "type": "uint256"}, {"name": "orderId", "type": "bytes32"}, {"name": "deadline", "type": "uint256"}, {"name": "v", "type": "uint8"}, {"name": "r", "type": "bytes32"}, {"name": "s", "type": "bytes32"}], "name": "payWithPermit", "outputs": [], "stateMutability": "nonpayable", "type": "function"}]
-        router = self.w3.eth.contract(address=Web3.to_checksum_address(router_addr), abi=router_abi)
+    def pay_with_permit(self, router_addr, token_addr, merchant_addr, amount, order_id, version="2"):
+        return self._call_with_failover(self.__pay_with_permit_raw, router_addr, token_addr, merchant_addr, amount, order_id, version)
+
+    def __pay_with_permit_raw(self, router_addr, token_addr, merchant_addr, amount, order_id, version="2"):
+        sig = self.sign_permit(token_addr, router_addr, amount, version=version)
+        router = self.w3.eth.contract(address=Web3.to_checksum_address(router_addr), abi=PAYNODE_ROUTER_ABI)
         order_id_bytes = self.w3.keccak(text=order_id)
         current_gas_price = int(self.w3.eth.gas_price * 1.2)
         with self.nonce_lock:
@@ -301,8 +347,10 @@ class PayNodeAgentClient:
         return self.w3.to_hex(tx_h)
 
     def pay(self, router_addr, token_addr, merchant_addr, amount, order_id):
-        router_abi = [{"inputs": [{"name": "token", "type": "address"}, {"name": "merchant", "type": "address"}, {"name": "amount", "type": "uint256"}, {"name": "orderId", "type": "bytes32"}], "name": "pay", "outputs": [], "stateMutability": "nonpayable", "type": "function"}]
-        router = self.w3.eth.contract(address=Web3.to_checksum_address(router_addr), abi=router_abi)
+        return self._call_with_failover(self.__pay_raw, router_addr, token_addr, merchant_addr, amount, order_id)
+
+    def __pay_raw(self, router_addr, token_addr, merchant_addr, amount, order_id):
+        router = self.w3.eth.contract(address=Web3.to_checksum_address(router_addr), abi=PAYNODE_ROUTER_ABI)
         order_id_bytes = self.w3.keccak(text=order_id)
         current_gas_price = int(self.w3.eth.gas_price * 1.2)
         with self.nonce_lock:

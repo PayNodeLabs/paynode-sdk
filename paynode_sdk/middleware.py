@@ -47,13 +47,20 @@ class PayNodeMiddleware(BaseHTTPMiddleware):
         self.chain_id = chain_id
         self.generate_order_id = generate_order_id or (lambda r: f"agent_py_{int(time.time() * 1000)}")
 
-        self.amount_int = int(float(price) * (10 ** decimals))
+        # DEV-2 FIX: Avoid float precision risks by using integer arithmetic or decimal string parsing
+        if "." in price:
+            parts = price.split(".")
+            integer_part = parts[0]
+            fraction_part = parts[1][:decimals].ljust(decimals, "0")
+            self.amount_int = int(integer_part + fraction_part)
+        else:
+            self.amount_int = int(price) * (10 ** decimals)
         self.description = kwargs.get('description', "Protected Resource")
         self.max_timeout_seconds = kwargs.get('max_timeout_seconds', 3600)
 
     async def dispatch(self, request: Request, call_next):
-        v2_payload_header = request.headers.get('x-402-payload')
-        order_id = request.headers.get('x-402-order-id')
+        v2_payload_header = request.headers.get('X-402-Payload')
+        order_id = request.headers.get('X-402-Order-Id')
 
         if not order_id:
             order_id = self.generate_order_id(request)
@@ -76,10 +83,14 @@ class PayNodeMiddleware(BaseHTTPMiddleware):
                         "amount": str(self.amount_int),
                         "orderId": order_id
                     },
-                    unified_payload.get("payload", {}).get("extra", {}) if unified_payload.get("type") == "eip3009" else {}
+                    # BUG-1 FIX: extra should come from our own config (v2Response schema), not the agent's payload
+                    {
+                        "name": self.currency,
+                        "version": "2" # USDC v2
+                    } if unified_payload.get("type") == "eip3009" else {}
                 )
                 if result.get("isValid"):
-                    request.state.paynode = {"unified_payload": unified_payload, "order_id": order_id}
+                    request.state.paynode = {"unified_payload": unified_payload, "orderId": order_id}
                     return await call_next(request)
                 else:
                     err = result.get("error")

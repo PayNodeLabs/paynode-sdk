@@ -3,7 +3,7 @@ PayNode Webhook Notifier — monitors on-chain PaymentReceived events
 and delivers structured webhook POSTs to a merchant's endpoint.
 
 Features:
-- HMAC-SHA256 signature for authenticity (header: x-paynode-signature)
+- HMAC-SHA256 signature for authenticity (header: X-402-Signature)
 - Configurable polling interval
 - Automatic retry with exponential backoff (3 attempts)
 - Async-first design
@@ -73,7 +73,7 @@ class PayNodeWebhookNotifier:
     Usage:
         notifier = PayNodeWebhookNotifier(
             rpc_url="https://mainnet.base.org",
-            contract_address="0x92e20164FC457a2aC35f53D06268168e6352b200",
+            contract_address="0x4A73696ccF76E7381b044cB95127B3784369Ed63",
             webhook_url="https://myshop.com/api/paynode-webhook",
             webhook_secret="whsec_mysecretkey123",
         )
@@ -201,9 +201,9 @@ class PayNodeWebhookNotifier:
 
         headers = {
             "Content-Type": "application/json",
-            "x-paynode-signature": f"sha256={signature}",
-            "x-paynode-event": "payment.received",
-            "x-paynode-delivery-id": f"{event.tx_hash}-{attempt}",
+            "X-402-Signature": f"sha256={signature}",
+            "X-402-Event": "payment.received",
+            "X-402-Delivery-Id": f"{event.tx_hash}-{attempt}",
             **self.custom_headers,
         }
 

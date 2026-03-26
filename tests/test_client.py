@@ -9,7 +9,7 @@ from paynode_sdk import PayNodeAgentClient, PayNodeException, ErrorCode
 MOCK_PRIVATE_KEY = "0x" + "1" * 64
 MOCK_RPC = "https://sepolia.base.org"
 MOCK_MERCHANT = "0xMerchantWalletAddress789"
-MOCK_TOKEN = "0x109AEddD656Ed2761d1e210E179329105039c784"
+MOCK_TOKEN = "0x65c088EfBDB0E03185Dbe8e258Ad0cf4Ab7946b0"
 MOCK_ROUTER = "0xPayNodeRouterAddress123"
 MOCK_ORDER_ID = "order_12345"
 MOCK_TX_HASH = "0x6f3e1a0000000000000000000000000000000000000000000000000000000000"
@@ -93,7 +93,7 @@ def test_dust_limit_protection(client):
     }
     
     with pytest.raises(PayNodeException) as exc:
-        client._handle_x402_v2(v2_req)
+        client._handle_x402_v2("http://example.com", v2_req)
     assert exc.value.code == ErrorCode.amount_too_low
 
 def test_rpc_failover_logic():

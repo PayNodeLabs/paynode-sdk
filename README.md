@@ -34,7 +34,7 @@ response = agent.request_gate("https://api.merchant.com/premium-data", method="P
 print(response.json())
 ```
 
-### Key Features (v2.0)
+### Key Features (v2.1)
 - **EIP-3009 Support**: Sign payments off-chain using `TransferWithAuthorization`, allowing for gasless or relayer-mediated settlement.
 - **X402 V2 Protocol**: JSON-based handshake for more structured and machine-readable payment instructions.
 - **Dual Flow**: Automatic fallback to V1 (on-chain receipts) for legacy merchant support.

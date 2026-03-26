@@ -79,7 +79,7 @@ def test_handle_402_decision_logic(client):
         'accepts': [{
             'type': 'onchain',
             'network': 'eip155:84532',
-            'asset': "0x109AEddD656Ed2761d1e210E179329105039c784",
+            'asset': "0x65c088EfBDB0E03185Dbe8e258Ad0cf4Ab7946b0",
             'amount': '2000',
             'payTo': "0xMerchant",
             'router': "0xRouter"
@@ -89,11 +89,11 @@ def test_handle_402_decision_logic(client):
     # Case 1: Sufficient allowance -> calls pay
     with patch.object(client, '_get_allowance', return_value=5000), \
          patch.object(client, 'pay', return_value="0xHashPay") as mock_pay:
-        client._handle_x402_v2(requirements)
+        client._handle_x402_v2("http://example.com", requirements)
         mock_pay.assert_called_once()
         
     # Case 2: Insufficient allowance -> calls pay_with_permit
     with patch.object(client, '_get_allowance', return_value=0), \
          patch.object(client, 'pay_with_permit', return_value="0xHashPermit") as mock_permit:
-        client._handle_x402_v2(requirements)
+        client._handle_x402_v2("http://example.com", requirements)
         mock_permit.assert_called_once()
