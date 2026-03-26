@@ -1,5 +1,7 @@
 import pytest
 import responses
+import base64
+import json
 from unittest.mock import MagicMock, patch
 from paynode_sdk import PayNodeAgentClient, PayNodeException, ErrorCode
 
@@ -7,52 +9,61 @@ from paynode_sdk import PayNodeAgentClient, PayNodeException, ErrorCode
 MOCK_PRIVATE_KEY = "0x" + "1" * 64
 MOCK_RPC = "https://sepolia.base.org"
 MOCK_MERCHANT = "0xMerchantWalletAddress789"
-MOCK_TOKEN = "0x109AEddD656Ed2761d1e210E179329105039c784"
+MOCK_TOKEN = "0x65c088EfBDB0E03185Dbe8e258Ad0cf4Ab7946b0"
 MOCK_ROUTER = "0xPayNodeRouterAddress123"
 MOCK_ORDER_ID = "order_12345"
-MOCK_TX_HASH = "0x6f3e1a..."
+MOCK_TX_HASH = "0x6f3e1a0000000000000000000000000000000000000000000000000000000000"
 
 @pytest.fixture
 def client():
     """Returns a client with mocked W3 to avoid network errors during init."""
     with patch('paynode_sdk.client.Web3') as mock_w3:
-        mock_w3.return_value.is_connected.return_value = True
-        mock_w3.return_value.eth.account.from_key.return_value.address = "0xAgentWalletAddress"
+        mock_instance = mock_w3.return_value
+        mock_instance.is_connected.return_value = True
+        mock_instance.eth.chain_id = 84532 # Base Sepolia
+        mock_instance.eth.account.from_key.return_value.address = "0xAgentWalletAddress"
         return PayNodeAgentClient(MOCK_PRIVATE_KEY, MOCK_RPC)
 
 @responses.activate
-def test_402_handshake_parsing(client):
+def test_402_v2_onchain_handshake(client):
     """
-    Simulates a 402 'Payment Required' response from a server.
-    Ensures the client correctly extracts metadata from custom PayNode headers.
+    Simulates a 402 with X-402-Required header (On-chain path).
     """
     target_url = "http://api.agent/secure"
     
+    v2_req = {
+        "x402Version": 2,
+        "accepts": [{
+            "type": "onchain",
+            "network": "eip155:84532",
+            "amount": "2000",
+            "asset": MOCK_TOKEN,
+            "payTo": MOCK_MERCHANT,
+            "router": MOCK_ROUTER
+        }]
+    }
+    b64_req = base64.b64encode(json.dumps(v2_req).encode()).decode()
+
     # 1. Mock the 402 response
     responses.add(
         responses.GET, target_url,
         headers={
-            'x-paynode-contract': MOCK_ROUTER,
-            'x-paynode-merchant': MOCK_MERCHANT,
-            'x-paynode-amount': '2000', # 0.002 USDC
-            'x-paynode-token-address': MOCK_TOKEN,
-            'x-paynode-order-id': MOCK_ORDER_ID,
-            'x-paynode-chain-id': '84532'
+            'X-402-Required': b64_req,
+            'X-402-Order-Id': MOCK_ORDER_ID
         },
-        status=402,
-        json={"error": "Payment Required"}
+        status=402
     )
     
-    # 2. Mock a successful subsequent request (after payment)
+    # 2. Mock a successful subsequent request
     responses.add(
         responses.GET, target_url,
         status=200,
         json={"data": "Premium Secret Content"}
     )
     
-    # 3. Patch the on-chain payment logic to just return a fake TxHash
-    with patch.object(client, 'pay_with_permit', return_value=MOCK_TX_HASH) as mock_pay, \
-         patch.object(client, '_get_allowance', return_value=0): # Trigger permit
+    # 3. Patch the on-chain payment logic
+    with patch.object(client, 'pay', return_value=MOCK_TX_HASH) as mock_pay, \
+         patch.object(client, '_get_allowance', return_value=1000000): # Already has allowance
         
         response = client.get(target_url)
         
@@ -60,21 +71,29 @@ def test_402_handshake_parsing(client):
         assert response.status_code == 200
         assert response.json()["data"] == "Premium Secret Content"
         
-        # Verify 402 headers were correctly parsed and passed to pay method
-        mock_pay.assert_called_once_with(MOCK_ROUTER, MOCK_TOKEN, MOCK_MERCHANT, 2000, MOCK_ORDER_ID)
+        # Verify X-402-Payload was sent
+        retry_request = responses.calls[1].request
+        assert 'X-402-Payload' in retry_request.headers
+        payload = json.loads(base64.b64decode(retry_request.headers['X-402-Payload']).decode())
+        assert payload['type'] == 'onchain'
+        assert payload['payload']['txHash'] == MOCK_TX_HASH
 
 def test_dust_limit_protection(client):
     """Ensures the client throws an exception for payments < 0.001 USDC."""
-    headers = {
-        'x-paynode-contract': MOCK_ROUTER,
-        'x-paynode-merchant': MOCK_MERCHANT,
-        'x-paynode-amount': '500', # Below 1000 limit
-        'x-paynode-token-address': MOCK_TOKEN,
-        'x-paynode-order-id': MOCK_ORDER_ID
+    v2_req = {
+        "x402Version": 2,
+        "accepts": [{
+            "type": "onchain",
+            "network": "eip155:84532",
+            "amount": "500", # Below 1000 limit
+            "asset": MOCK_TOKEN,
+            "payTo": MOCK_MERCHANT,
+            "router": MOCK_ROUTER
+        }]
     }
     
     with pytest.raises(PayNodeException) as exc:
-        client._handle_402(headers)
+        client._handle_x402_v2("http://example.com", v2_req)
     assert exc.value.code == ErrorCode.amount_too_low
 
 def test_rpc_failover_logic():
@@ -98,11 +117,74 @@ def test_rpc_failover_logic():
 def test_insufficient_funds_on_chain(client):
     """Mocks on-chain failure (e.g. out of gas) and verifies exception handling."""
     target_url = "http://api.agent/secure"
-    responses.add(responses.GET, target_url, status=402, headers={'x-paynode-amount': '2000', 'x-paynode-contract': MOCK_ROUTER, 'x-paynode-merchant': MOCK_MERCHANT, 'x-paynode-token-address': MOCK_TOKEN, 'x-paynode-order-id': MOCK_ORDER_ID})
+    responses.add(responses.GET, target_url, status=402, headers={
+        'X-402-Required': base64.b64encode(json.dumps({
+            "x402Version": 2,
+            "accepts": [{
+                "type": "onchain",
+                "network": "eip155:84532",
+                "amount": "2000",
+                "asset": MOCK_TOKEN,
+                "payTo": MOCK_MERCHANT,
+                "router": MOCK_ROUTER
+            }]
+        }).encode()).decode(),
+        'X-402-Order-Id': MOCK_ORDER_ID
+    })
 
     with patch.object(client, '_get_allowance', return_value=1000000), \
-         patch.object(client, '_execute_pay', side_effect=Exception("Insufficient Funds")):
+         patch.object(client, 'pay', side_effect=PayNodeException(ErrorCode.transaction_failed)):
         
         with pytest.raises(PayNodeException) as exc:
             client.get(target_url)
         assert exc.value.code == ErrorCode.transaction_failed
+
+@responses.activate
+def test_402_v2_eip3009_handshake(client):
+    """
+    Simulates an EIP-3009 payment path via X-402-Required header.
+    """
+    target_url = "http://api.agent/v2/secure"
+    
+    v2_req = {
+        "x402Version": 2,
+        "accepts": [
+            {
+                "type": "eip3009",
+                "network": "eip155:84532",
+                "amount": "3000",
+                "asset": MOCK_TOKEN,
+                "payTo": MOCK_MERCHANT,
+                "extra": {"name": "USD Coin", "version": "2"}
+            }
+        ]
+    }
+    b64_req = base64.b64encode(json.dumps(v2_req).encode()).decode()
+
+    # 1. Mock the 402 response
+    responses.add(
+        responses.GET, target_url,
+        status=402,
+        headers={'X-402-Required': b64_req, 'X-402-Order-Id': 'v2-order'}
+    )
+    
+    # 2. Mock success response
+    responses.add(
+        responses.GET, target_url,
+        status=200,
+        json={"data": "v2 secret"}
+    )
+    
+    # 3. Patch the signing logic
+    with patch.object(client, 'sign_transfer_with_authorization', return_value={"signature": "0xsig", "authorization": {}}) as mock_sign:
+        response = client.get(target_url)
+        
+        assert response.status_code == 200
+        assert mock_sign.called
+        
+        # Verify X-402-Payload
+        retry_request = responses.calls[1].request
+        assert 'X-402-Payload' in retry_request.headers
+        payload = json.loads(base64.b64decode(retry_request.headers['X-402-Payload']).decode())
+        assert payload['type'] == 'eip3009'
+        assert payload['payload']['signature'] == '0xsig'

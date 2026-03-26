@@ -10,24 +10,69 @@ class IdempotencyStore(ABC):
         """
         pass
 
+    @abstractmethod
+    async def delete(self, tx_hash: str) -> None:
+        """
+        Deletes a transaction hash from the store.
+        Used for rolling back a lock if subsequent verification fails.
+        """
+        pass
+
+import threading
+
 class MemoryIdempotencyStore(IdempotencyStore):
     def __init__(self):
         self.cache: Dict[str, float] = {}
+        self.last_cleanup = time.time()
+        self.lock = threading.Lock()
 
     async def check_and_set(self, tx_hash: str, ttl_seconds: int) -> bool:
-        now = time.time()
-        expiry = self.cache.get(tx_hash)
-        
-        if expiry and expiry > now:
-            return False
+        with self.lock:
+            now = time.time()
+            expiry = self.cache.get(tx_hash)
+
+            if expiry and expiry > now:
+                return False
+
+            self.cache[tx_hash] = now + ttl_seconds
             
-        self.cache[tx_hash] = now + ttl_seconds
-        self._cleanup()
-        return True
+            # BUG-5 FIX: Only cleanup periodically to avoid O(n) overhead on every call.
+            if now - self.last_cleanup > 60:
+                self._cleanup()
+                self.last_cleanup = now
+                
+            return True
+
+    async def delete(self, tx_hash: str) -> None:
+        with self.lock:
+            self.cache.pop(tx_hash, None)
 
     def _cleanup(self):
+        # Already inside lock when called from check_and_set
         now = time.time()
-        # Simple cleanup logic: remove expired entries
         expired_keys = [k for k, v in self.cache.items() if v <= now]
         for k in expired_keys:
             del self.cache[k]
+
+
+class RedisIdempotencyStore(IdempotencyStore):
+    """
+    Production-ready implementation using Redis.
+    Uses `SET txHash 1 NX EX ttlSeconds` for atomic check-and-set.
+
+    Requires: pip install redis
+    Usage:
+        import redis
+        store = RedisIdempotencyStore(redis.Redis(host='localhost', port=6379))
+    """
+    def __init__(self, redis_client, prefix: str = "paynode:tx:"):
+        self.redis = redis_client
+        self.prefix = prefix
+
+    async def check_and_set(self, tx_hash: str, ttl_seconds: int) -> bool:
+        key = f"{self.prefix}{tx_hash}"
+        return bool(self.redis.set(key, 1, ex=ttl_seconds, nx=True))
+
+    async def delete(self, tx_hash: str) -> None:
+        key = f"{self.prefix}{tx_hash}"
+        self.redis.delete(key)

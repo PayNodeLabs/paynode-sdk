@@ -8,7 +8,7 @@ warnings.filterwarnings("ignore", category=DeprecationWarning, module="websocket
 from .middleware import PayNodeMiddleware, x402_gate
 from .verifier import PayNodeVerifier
 from .errors import ErrorCode, PayNodeException
-from .idempotency import IdempotencyStore, MemoryIdempotencyStore
+from .idempotency import IdempotencyStore, MemoryIdempotencyStore, RedisIdempotencyStore
 from .webhook import PayNodeWebhookNotifier, PaymentEvent
 from .client import PayNodeAgentClient
 from .constants import (
@@ -22,7 +22,7 @@ from .constants import (
 
 __all__ = [
     "PayNodeMiddleware", "x402_gate", "PayNodeVerifier", "ErrorCode", "PayNodeException",
-    "IdempotencyStore", "MemoryIdempotencyStore",
+    "IdempotencyStore", "MemoryIdempotencyStore", "RedisIdempotencyStore",
     "PayNodeWebhookNotifier", "PaymentEvent",
     "PayNodeAgentClient",
     "PAYNODE_ROUTER_ADDRESS", "PAYNODE_ROUTER_ADDRESS_SANDBOX",

@@ -1,4 +1,7 @@
 import time
+import base64
+import json
+import logging
 from typing import Optional, Callable, Any
 from fastapi import Request, Response
 from fastapi.responses import JSONResponse
@@ -14,6 +17,8 @@ from .constants import (
 
 from starlette.middleware.base import BaseHTTPMiddleware
 
+logger = logging.getLogger("paynode_sdk.middleware")
+
 class PayNodeMiddleware(BaseHTTPMiddleware):
     def __init__(
         self,
@@ -27,7 +32,8 @@ class PayNodeMiddleware(BaseHTTPMiddleware):
         decimals: int = BASE_USDC_DECIMALS,
         rpc_urls: list | str = BASE_RPC_URLS,
         store: Optional[IdempotencyStore] = None,
-        generate_order_id: Optional[Callable[[Request], str]] = None
+        generate_order_id: Optional[Callable[[Request], str]] = None,
+        **kwargs
     ):
         super().__init__(app)
         # The Verifier holds the state of the idempotency store
@@ -41,62 +47,107 @@ class PayNodeMiddleware(BaseHTTPMiddleware):
         self.chain_id = chain_id
         self.generate_order_id = generate_order_id or (lambda r: f"agent_py_{int(time.time() * 1000)}")
 
-        # Calculate raw amount (integer)
-        self.amount_int = int(float(price) * (10 ** decimals))
+        # DEV-2 FIX: Avoid float precision risks by using integer arithmetic or decimal string parsing
+        if "." in price:
+            parts = price.split(".")
+            integer_part = parts[0]
+            fraction_part = parts[1][:decimals].ljust(decimals, "0")
+            self.amount_int = int(integer_part + fraction_part)
+        else:
+            self.amount_int = int(price) * (10 ** decimals)
+        self.description = kwargs.get('description', "Protected Resource")
+        self.max_timeout_seconds = kwargs.get('max_timeout_seconds', 3600)
 
     async def dispatch(self, request: Request, call_next):
-        receipt_hash = request.headers.get('x-paynode-receipt')
-        order_id = request.headers.get('x-paynode-order-id')
+        v2_payload_header = request.headers.get('X-402-Payload')
+        order_id = request.headers.get('X-402-Order-Id')
 
         if not order_id:
             order_id = self.generate_order_id(request)
 
-        # Phase 1: Handshake (402 Payment Required)
-        if not receipt_hash:
-            headers = {
-                'x-paynode-contract': self.contract_address,
-                'x-paynode-merchant': self.merchant_address,
-                'x-paynode-amount': str(self.amount_int),
-                'x-paynode-currency': self.currency,
-                'x-paynode-token-address': self.token_address,
-                'x-paynode-chain-id': str(self.chain_id),
-                'x-paynode-order-id': order_id,
-            }
-            return JSONResponse(
-                status_code=402,
-                headers=headers,
-                content={
-                    "error": "Payment Required",
-                    "code": ErrorCode.missing_receipt,
-                    "message": "Please pay to PayNode contract and provide 'x-paynode-receipt' header.",
-                    "amount": self.price,
-                    "currency": self.currency
-                }
-            )
+        # Handle x402 v2 Unified Payload
+        unified_payload = None
+        if v2_payload_header:
+            try:
+                unified_payload = json.loads(base64.b64decode(v2_payload_header.encode()).decode())
+            except Exception as e:
+                logger.error(f"❌ [PayNode-Middleware] Failed to decode X-402-Payload header: {e}")
 
-        # Phase 2: On-chain Verification
-        result = await self.verifier.verify_payment(receipt_hash, {
-            "merchantAddress": self.merchant_address,
-            "tokenAddress": self.token_address,
-            "amount": self.amount_int,
-            "orderId": order_id
-        })
+        if unified_payload:
+            try:
+                result = await self.verifier.verify(
+                    unified_payload,
+                    {
+                        "merchantAddress": self.merchant_address,
+                        "tokenAddress": self.token_address,
+                        "amount": str(self.amount_int),
+                        "orderId": order_id
+                    },
+                    # BUG-1 FIX: extra should come from our own config (v2Response schema), not the agent's payload
+                    {
+                        "name": self.currency,
+                        "version": "2" # USDC v2
+                    } if unified_payload.get("type") == "eip3009" else {}
+                )
+                if result.get("isValid"):
+                    request.state.paynode = {"unified_payload": unified_payload, "orderId": order_id}
+                    return await call_next(request)
+                else:
+                    err = result.get("error")
+                    return JSONResponse(
+                        status_code=403,
+                        content={
+                            "error": "Forbidden",
+                            "code": err.code if hasattr(err, 'code') else ErrorCode.invalid_receipt,
+                            "message": str(err)
+                        }
+                    )
+            except Exception as e:
+                logger.error(f"⚠️ [PayNode-Middleware] Failed to process x402 v2 payload: {e}")
 
-        if result.get("isValid"):
-            # Validation Passed!
-            return await call_next(request)
-        else:
-            # Validation Failed
-            err = result.get("error")
-            print(f"❌ [PayNode-PY] Verification Failed for Order: {order_id}. Reason: {str(err)}")
-            return JSONResponse(
-                status_code=403,
-                content={
-                    "error": "Forbidden",
-                    "code": err.code if hasattr(err, 'code') else ErrorCode.invalid_receipt,
-                    "message": str(err)
+        # No valid payment found, return 402 with X-402-Required
+        v2_response = {
+            "x402Version": 2,
+            "error": "Payment Required by PayNode",
+            "resource": {
+                "url": str(request.url),
+                "description": self.description,
+                "mimeType": request.headers.get("accept", "application/json")
+            },
+            "accepts": [
+                {
+                    "scheme": "exact",
+                    "type": "eip3009",
+                    "network": f"eip155:{self.chain_id}",
+                    "amount": str(self.amount_int),
+                    "asset": self.token_address,
+                    "payTo": self.merchant_address,
+                    "maxTimeoutSeconds": self.max_timeout_seconds,
+                    "extra": {
+                        "name": self.currency,
+                        "version": "2"
+                    }
+                },
+                {
+                    "scheme": "exact",
+                    "type": "onchain",
+                    "network": f"eip155:{self.chain_id}",
+                    "amount": str(self.amount_int),
+                    "asset": self.token_address,
+                    "payTo": self.merchant_address,
+                    "maxTimeoutSeconds": self.max_timeout_seconds,
+                    "router": self.contract_address
                 }
-            )
+            ]
+        }
+
+        b64_required = base64.b64encode(json.dumps(v2_response).encode()).decode()
+
+        headers = {
+            'X-402-Required': b64_required,
+            'X-402-Order-Id': order_id,
+        }
+        return JSONResponse(status_code=402, headers=headers, content=v2_response)
 
 def x402_gate(
     merchant_address: str, 

@@ -3,7 +3,7 @@
 [![Official Documentation](https://img.shields.io/badge/Docs-docs.paynode.dev-00ff88?style=for-the-badge&logo=readthedocs)](https://docs.paynode.dev)
 [![PyPI Version](https://img.shields.io/pypi/v/paynode-sdk-python.svg?style=for-the-badge)](https://pypi.org/project/paynode-sdk-python/)
 
-The official Python SDK for the **PayNode Protocol**. PayNode allows autonomous AI Agents to seamlessly pay for APIs and computational resources using USDC on Base L2, utilizing the standardized HTTP 402 protocol.
+The official Python SDK for the **PayNode Protocol (v3.1)**. PayNode allows autonomous AI Agents to seamlessly pay for APIs and computational resources using USDC on Base L2, utilizing the standardized HTTP 402 protocol with support for both on-chain receipts and off-chain signatures (EIP-3009).
 
 ## 📖 Read the Docs
 
@@ -33,6 +33,17 @@ response = agent.request_gate("https://api.merchant.com/premium-data", method="P
 
 print(response.json())
 ```
+
+### Key Features (v2.1)
+- **EIP-3009 Support**: Sign payments off-chain using `TransferWithAuthorization`, allowing for gasless or relayer-mediated settlement.
+- **X402 V2 Protocol**: JSON-based handshake for more structured and machine-readable payment instructions.
+- **Dual Flow**: Automatic fallback to V1 (on-chain receipts) for legacy merchant support.
+- **FastAPI Middleware**: Easy-to-use middleware for merchants to protect their API routes.
+
+## 🗺️ Roadmap
+- **TRON Support**: USDT (TRC-20) payment integration.
+- **Solana Support**: SPL USDC/USDT payment integration.
+- **Cross-chain**: Universal settlement via bridges.
 
 ## 🚀 Run the Demo
 

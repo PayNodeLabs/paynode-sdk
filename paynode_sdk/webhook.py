@@ -3,7 +3,7 @@ PayNode Webhook Notifier — monitors on-chain PaymentReceived events
 and delivers structured webhook POSTs to a merchant's endpoint.
 
 Features:
-- HMAC-SHA256 signature for authenticity (header: x-paynode-signature)
+- HMAC-SHA256 signature for authenticity (header: X-402-Signature)
 - Configurable polling interval
 - Automatic retry with exponential backoff (3 attempts)
 - Async-first design
@@ -73,7 +73,7 @@ class PayNodeWebhookNotifier:
     Usage:
         notifier = PayNodeWebhookNotifier(
             rpc_url="https://mainnet.base.org",
-            contract_address="0x92e20164FC457a2aC35f53D06268168e6352b200",
+            contract_address="0x4A73696ccF76E7381b044cB95127B3784369Ed63",
             webhook_url="https://myshop.com/api/paynode-webhook",
             webhook_secret="whsec_mysecretkey123",
         )
@@ -100,7 +100,7 @@ class PayNodeWebhookNotifier:
             raise ValueError("webhook_secret is required")
 
         self.contract_address = contract_address or PAYNODE_ROUTER_ADDRESS
-        self.w3 = Web3(Web3.HTTPProvider(rpc_url, request_kwargs={"timeout": 10}))
+        self.w3 = Web3(Web3.HTTPProvider(rpc_url, request_kwargs={"timeout": 3}))
         self.contract = self.w3.eth.contract(
             address=Web3.to_checksum_address(self.contract_address),
             abi=PAYNODE_ROUTER_ABI
@@ -120,7 +120,7 @@ class PayNodeWebhookNotifier:
     async def start(self, from_block: Optional[int] = None) -> None:
         """Start polling for PaymentReceived events."""
         if self._running:
-            logger.warning("[PayNode Webhook] Already running.")
+            logger.warning("🔔 [PayNode Webhook] Already running.")
             return
 
         self._last_block = from_block if from_block is not None else self.w3.eth.block_number
@@ -158,7 +158,7 @@ class PayNodeWebhookNotifier:
 
                     self._last_block = current_block
             except Exception as e:
-                logger.error(f"[PayNode Webhook] Poll error: {e}")
+                logger.error(f"❌ [PayNode Webhook] Poll error: {e}")
 
             await asyncio.sleep(self.poll_interval)
 
@@ -179,7 +179,7 @@ class PayNodeWebhookNotifier:
                 timestamp=time.time(),
             )
         except Exception as e:
-            logger.error(f"[PayNode Webhook] Failed to parse event: {e}")
+            logger.error(f"❌ [PayNode Webhook] Failed to parse event: {e}")
             return None
 
     async def _deliver(self, event: PaymentEvent, attempt: int = 1) -> None:
@@ -201,9 +201,9 @@ class PayNodeWebhookNotifier:
 
         headers = {
             "Content-Type": "application/json",
-            "x-paynode-signature": f"sha256={signature}",
-            "x-paynode-event": "payment.received",
-            "x-paynode-delivery-id": f"{event.tx_hash}-{attempt}",
+            "X-402-Signature": f"sha256={signature}",
+            "X-402-Event": "payment.received",
+            "X-402-Delivery-Id": f"{event.tx_hash}-{attempt}",
             **self.custom_headers,
         }
 
@@ -221,13 +221,13 @@ class PayNodeWebhookNotifier:
                         self.on_success(event)
 
         except Exception as e:
-            logger.error(f"[PayNode Webhook] Delivery failed (attempt {attempt}/{MAX_RETRIES}): {e}")
+            logger.error(f"⚠️ [PayNode Webhook] Delivery failed (attempt {attempt}/{MAX_RETRIES}): {e}")
 
             if attempt < MAX_RETRIES:
                 backoff = (2 ** attempt)  # 2s, 4s, 8s
                 await asyncio.sleep(backoff)
                 return await self._deliver(event, attempt + 1)
 
-            logger.error(f"[PayNode Webhook] Gave up on tx {event.tx_hash} after {MAX_RETRIES} attempts.")
+            logger.error(f"❌ [PayNode Webhook] Gave up on tx {event.tx_hash} after {MAX_RETRIES} attempts.")
             if self.on_error:
                 self.on_error(e, event)
