@@ -88,14 +88,14 @@ class PayNodeMiddleware(BaseHTTPMiddleware):
                     p_type = parsed.get('_paynode', {}).get('type') or inferred_type
                     
                     unified_payload = {
-                        "version": "2.2.0",
+                        "version": "2.2.1",
                         "type": p_type,
                         "orderId": internal_order_id,
                         "router": parsed.get('accepted', {}).get('router'),
                         "payload": parsed.get('payload')
                     }
                     order_id = internal_order_id
-                elif parsed.get('version') == "2.2.0":
+                elif isinstance(parsed.get('version'), str) and parsed.get('version').startswith(("2.3", "2.2")):
                     # Legacy PayNode format
                     unified_payload = parsed
                     if 'orderId' in unified_payload:
