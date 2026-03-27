@@ -8,9 +8,9 @@ from paynode_sdk import PayNodeAgentClient, PayNodeException, ErrorCode
 # Standard Base Sepolia Mock Values
 MOCK_PRIVATE_KEY = "0x" + "1" * 64
 MOCK_RPC = "https://sepolia.base.org"
-MOCK_MERCHANT = "0xMerchantWalletAddress789"
+MOCK_MERCHANT = "0x" + "7" * 40
 MOCK_TOKEN = "0x65c088EfBDB0E03185Dbe8e258Ad0cf4Ab7946b0"
-MOCK_ROUTER = "0xPayNodeRouterAddress123"
+MOCK_ROUTER = "0x" + "9" * 40
 MOCK_ORDER_ID = "order_12345"
 MOCK_TX_HASH = "0x6f3e1a0000000000000000000000000000000000000000000000000000000000"
 
@@ -71,11 +71,12 @@ def test_402_v2_onchain_handshake(client):
         assert response.status_code == 200
         assert response.json()["data"] == "Premium Secret Content"
         
-        # Verify X-402-Payload was sent
+        # Verify PAYMENT-SIGNATURE was sent
         retry_request = responses.calls[1].request
-        assert 'X-402-Payload' in retry_request.headers
-        payload = json.loads(base64.b64decode(retry_request.headers['X-402-Payload']).decode())
-        assert payload['type'] == 'onchain'
+        assert 'PAYMENT-SIGNATURE' in retry_request.headers
+        payload = json.loads(base64.b64decode(retry_request.headers['PAYMENT-SIGNATURE']).decode())
+        assert payload['x402Version'] == 2
+        assert payload['_paynode']['type'] == 'onchain'
         assert payload['payload']['txHash'] == MOCK_TX_HASH
 
 def test_dust_limit_protection(client):
@@ -133,7 +134,8 @@ def test_insufficient_funds_on_chain(client):
     })
 
     with patch.object(client, '_get_allowance', return_value=1000000), \
-         patch.object(client, 'pay', side_effect=PayNodeException(ErrorCode.transaction_failed)):
+         patch.object(client, 'pay', side_effect=PayNodeException(ErrorCode.transaction_failed)), \
+         patch.object(client, 'pay_with_permit', side_effect=PayNodeException(ErrorCode.transaction_failed)):
         
         with pytest.raises(PayNodeException) as exc:
             client.get(target_url)
@@ -182,9 +184,48 @@ def test_402_v2_eip3009_handshake(client):
         assert response.status_code == 200
         assert mock_sign.called
         
-        # Verify X-402-Payload
+        # Verify PAYMENT-SIGNATURE
         retry_request = responses.calls[1].request
-        assert 'X-402-Payload' in retry_request.headers
-        payload = json.loads(base64.b64decode(retry_request.headers['X-402-Payload']).decode())
-        assert payload['type'] == 'eip3009'
+        assert 'PAYMENT-SIGNATURE' in retry_request.headers
+        payload = json.loads(base64.b64decode(retry_request.headers['PAYMENT-SIGNATURE']).decode())
+        assert payload['x402Version'] == 2
+        assert payload['_paynode']['type'] == 'eip3009'
         assert payload['payload']['signature'] == '0xsig'
+
+@responses.activate
+def test_settlement_confirmation_logging(client):
+    """
+    Ensures the client correctly reads and logs the PAYMENT-RESPONSE header.
+    """
+    target_url = "http://api.agent/settle"
+    
+    # 1. Mock the 402 response
+    v2_req = {
+        "x402Version": 2,
+        "accepts": [{"type": "onchain", "network": "eip155:84532", "amount": "1000", "asset": MOCK_TOKEN, "payTo": MOCK_MERCHANT, "router": MOCK_ROUTER}]
+    }
+    b64_req = base64.b64encode(json.dumps(v2_req).encode()).decode()
+    responses.add(responses.GET, target_url, status=402, headers={'X-402-Required': b64_req})
+    
+    # 2. Mock settlement header in success response
+    settle_data = {"success": True, "transaction": MOCK_TX_HASH}
+    b64_settle = base64.b64encode(json.dumps(settle_data).encode()).decode()
+    
+    responses.add(
+        responses.GET, target_url,
+        status=200,
+        headers={'PAYMENT-RESPONSE': b64_settle},
+        json={"data": "OK"}
+    )
+    
+    with patch.object(client, 'pay', return_value=MOCK_TX_HASH), \
+         patch.object(client, '_get_allowance', return_value=1000000), \
+         patch('paynode_sdk.client.logger') as mock_logger:
+        
+        response = client.get(target_url)
+        assert response.status_code == 200
+        
+        # Verify logger was called with confirmation
+        # Since logger.info is called directly from the module logger, we need to handle that.
+        # But here we patched it specifically.
+        mock_logger.info.assert_any_call(f"✅ [PayNode-PY] Settlement confirmed: {MOCK_TX_HASH}")

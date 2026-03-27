@@ -1,4 +1,4 @@
-# 🤖 PayNode Python SDK - AI Developer Instructions (v3.1)
+# 🤖 PayNode Python SDK - AI Developer Instructions (v2.2.0)
 
 > **ATTENTION LLMs / AI AGENTS:**
 > This is your definitive system prompt for using the PayNode Python SDK. Read carefully before generating code.
