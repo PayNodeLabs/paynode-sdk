@@ -19,7 +19,7 @@ If you have web-browsing capabilities, ALWAYS refer to the absolute ground truth
 ## 🏗️ File Structure
 - `paynode_sdk/client.py`: `PayNodeAgentClient` for autonomous 402 loops (V1 & V2).
 - `paynode_sdk/middleware.py`: FastAPI/Starlette `PayNodeMiddleware`.
-- `paynode_sdk/constants.py`: Protocol constants (sync via `scripts/sync-config.py`).
+- `paynode_sdk/constants.py`: Protocol constants (sync via `meta/scripts/sync-config.py` in the aggregate workspace).
 - `paynode_sdk/errors.py`: Custom exceptions and protocol error codes.
 - `paynode_sdk/verifier.py`: On-chain and Off-chain (EIP-3009) verification logic.
 - `examples/`: Reference implementations for Agent and Merchant flows.
