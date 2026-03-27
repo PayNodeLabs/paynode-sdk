@@ -159,6 +159,7 @@ class PayNodeAgentClient:
             raise PayNodeException(ErrorCode.token_not_accepted, message=f"Token {requirement['asset']} is not in the whitelist for chain {chain_id}")
 
         logger.info(f"💡 [PayNode-PY] Payment request (v2): {requirement['amount']} atomic units of {requirement['asset']} to {requirement['payTo']}")
+        logger.info(f"💡 [PayNode-PY] Selected payment method: {requirement.get('type', 'onchain')} on {requirement.get('network')}")
         
         # Dust limit check
         if int(requirement['amount']) < MIN_PAYMENT_AMOUNT:
@@ -382,7 +383,7 @@ class PayNodeAgentClient:
         sig = self.sign_permit(token_addr, router_addr, amount, version=version)
         router = self.w3.eth.contract(address=Web3.to_checksum_address(router_addr), abi=PAYNODE_ROUTER_ABI)
         order_id_bytes = self.w3.keccak(text=order_id)
-        current_gas_price = int(self.w3.eth.gas_price * 1.2)
+        current_gas_price = self.w3.eth.gas_price * 120 // 100
         with self.nonce_lock:
             nonce = self.w3.eth.get_transaction_count(self.account.address, 'pending')
             tx = router.functions.payWithPermit(self.account.address, Web3.to_checksum_address(token_addr), Web3.to_checksum_address(merchant_addr), amount, order_id_bytes, sig["deadline"], sig["v"], sig["r"], sig["s"]).build_transaction({'from': self.account.address, 'nonce': nonce, 'gas': 300000, 'gasPrice': current_gas_price})
@@ -397,7 +398,7 @@ class PayNodeAgentClient:
     def __pay_raw(self, router_addr, token_addr, merchant_addr, amount, order_id):
         router = self.w3.eth.contract(address=Web3.to_checksum_address(router_addr), abi=PAYNODE_ROUTER_ABI)
         order_id_bytes = self.w3.keccak(text=order_id)
-        current_gas_price = int(self.w3.eth.gas_price * 1.2)
+        current_gas_price = self.w3.eth.gas_price * 120 // 100
         with self.nonce_lock:
             nonce = self.w3.eth.get_transaction_count(self.account.address, 'pending')
             tx = router.functions.pay(Web3.to_checksum_address(token_addr), Web3.to_checksum_address(merchant_addr), amount, order_id_bytes).build_transaction({'from': self.account.address, 'nonce': nonce, 'gas': 200000, 'gasPrice': current_gas_price})

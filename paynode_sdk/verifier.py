@@ -47,7 +47,13 @@ class PayNodeVerifier:
             token_list = ACCEPTED_TOKENS.get(self.chain_id)
         else:
             token_list = None
-        self.accepted_tokens = set(t.lower() for t in token_list) if token_list else None
+
+        if not token_list:
+            raise PayNodeException(
+                ErrorCode.internal_error,
+                message="Verifier requires either a valid chain_id or accepted_tokens to initialize its whitelist"
+            )
+        self.accepted_tokens = set(t.lower() for t in token_list)
 
     async def verify(self, unified_payload: dict, expected: dict, extra: dict = None) -> dict:
         """
@@ -61,7 +67,7 @@ class PayNodeVerifier:
                  return {"isValid": False, "error": PayNodeException(ErrorCode.amount_too_low)}
 
             # 2. Security: Token Whitelist Check
-            if self.accepted_tokens and expected.get("tokenAddress", "").lower() not in self.accepted_tokens:
+            if expected.get("tokenAddress", "").lower() not in self.accepted_tokens:
                 return {"isValid": False, "error": PayNodeException(ErrorCode.token_not_accepted, message=f"Token {expected.get('tokenAddress')} not allowed")}
 
             payload_type = unified_payload.get("type")
