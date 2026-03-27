@@ -17,7 +17,7 @@ logger = logging.getLogger("paynode_sdk.client")
 
 class PayNodeAgentClient:
     """
-    The main PayNode Client for AI Agents (v2.2.0).
+    The main PayNode Client for AI Agents (v2.2.1).
     Automatically handles the x402 'Payment Required' handshake.
     Supports RPC redundancy, EIP-2612 Permit, and EIP-3009 Authorization.
     """
@@ -111,11 +111,18 @@ class PayNodeAgentClient:
                     except Exception as e:
                         logger.debug(f"⚠️ [PayNode-PY] Failed to parse 402 JSON body: {e}")
                 
-                if not body and b64_required:
+                header_body = None
+                if b64_required:
                     try:
-                        body = json.loads(base64.b64decode(b64_required).decode())
+                        header_body = json.loads(base64.b64decode(b64_required).decode())
                     except Exception as e:
                         logger.warning(f"❌ [PayNode-PY] Failed to decode PAYMENT-REQUIRED header: {e}")
+
+                if not body and header_body:
+                    body = header_body
+                elif body and header_body and not body.get('x402Version'):
+                    # Robustness: Merge header info into body if body is missing critical bits
+                    body.update({k: v for k, v in header_body.items() if k not in body})
 
                 if body and body.get('x402Version') == 2:
                     logger.info("🚀 [PayNode-PY] x402 v2 detected. Handling autonomous payment...")
@@ -217,7 +224,7 @@ class PayNodeAgentClient:
             },
             "payload": payload_data,
             "_paynode": {
-                "version": "2.2.0",
+                "version": "2.2.1",
                 "type": ptype,
                 "orderId": order_id
             }
@@ -248,7 +255,12 @@ class PayNodeAgentClient:
         settle_header = response.headers.get('PAYMENT-RESPONSE') or response.headers.get('X-PAYMENT-RESPONSE')
         if settle_header:
             try:
-                settle_data = json.loads(base64.b64decode(settle_header).decode())
+                settle_header_str = settle_header.strip()
+                if settle_header_str.startswith('{'):
+                    decoded = settle_header_str
+                else:
+                    decoded = base64.b64decode(settle_header).decode()
+                settle_data = json.loads(decoded)
                 if settle_data.get('success'):
                     logger.info(f"✅ [PayNode-PY] Settlement confirmed: {settle_data.get('transaction')}")
                 else:
