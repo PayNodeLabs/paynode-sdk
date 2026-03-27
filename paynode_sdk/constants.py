@@ -9,8 +9,8 @@ PROTOCOL_TREASURY = "0x598bF63F5449876efafa7b36b77Deb2070621C0E"
 PROTOCOL_FEE_BPS = 100
 MIN_PAYMENT_AMOUNT = 1000
 
-BASE_RPC_URLS = ["https://mainnet.base.org", "https://base.meowrpc.com", "https://1rpc.io/base"]
-BASE_RPC_URLS_SANDBOX = ["https://sepolia.base.org", "https://base-sepolia-rpc.publicnode.com"]
+BASE_RPC_URLS = ['https://mainnet.base.org', 'https://base.meowrpc.com', 'https://1rpc.io/base']
+BASE_RPC_URLS_SANDBOX = ['https://sepolia.base.org', 'https://base-sepolia-rpc.publicnode.com']
 
 ACCEPTED_TOKENS = {
     8453: ["0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"],

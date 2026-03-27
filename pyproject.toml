@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "paynode-sdk-python"
-version = "2.1.0"
+version = "2.2.0"
 description = "PayNode Protocol Python SDK for AI Agents"
 readme = "README.md"
 authors = [{ name = "PayNodeLabs", email = "contact@paynode.dev" }]
@@ -22,6 +22,9 @@ test = [
     "pytest>=7.0.0",
     "responses>=0.23.0",
     "pytest-mock>=3.10.0"
+]
+webhook = [
+    "aiohttp>=3.9.0"
 ]
 
 [project.urls]

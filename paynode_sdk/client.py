@@ -1,3 +1,5 @@
+import json
+import base64
 import time
 import logging
 import threading
@@ -15,7 +17,7 @@ logger = logging.getLogger("paynode_sdk.client")
 
 class PayNodeAgentClient:
     """
-    The main PayNode Client for AI Agents (v3.1).
+    The main PayNode Client for AI Agents (v2.2.0).
     Automatically handles the x402 'Payment Required' handshake.
     Supports RPC redundancy, EIP-2612 Permit, and EIP-3009 Authorization.
     """
@@ -93,13 +95,13 @@ class PayNodeAgentClient:
     def _request_with_402_retry(self, method: str, url: str, max_retries: int = 3, **kwargs) -> requests.Response:
         response = None
         for attempt in range(max_retries):
-            response = self.session.request(method, url, **kwargs)
+            response = self._request_with_settlement_check(method, url, **kwargs)
             if response.status_code == 402:
                 logger.info(f"💡 [PayNode-PY] 402 Detected (Attempt {attempt+1}/{max_retries}). Analyzing protocol version...")
                 
-                # Check for x402 v2 (JSON body or X-402-Required header)
+                # Check for x402 v2 (JSON body or official PAYMENT-REQUIRED header)
                 content_type = response.headers.get('Content-Type', '')
-                b64_required = response.headers.get('X-402-Required')
+                b64_required = response.headers.get('PAYMENT-REQUIRED') or response.headers.get('X-402-Required')
                 order_id = response.headers.get('X-402-Order-Id')
                 
                 body = None
@@ -111,15 +113,13 @@ class PayNodeAgentClient:
                 
                 if not body and b64_required:
                     try:
-                        import base64
-                        import json
                         body = json.loads(base64.b64decode(b64_required).decode())
                     except Exception as e:
-                        logger.warning(f"❌ [PayNode-PY] Failed to decode X-402-Required header: {e}")
+                        logger.warning(f"❌ [PayNode-PY] Failed to decode PAYMENT-REQUIRED header: {e}")
 
                 if body and body.get('x402Version') == 2:
                     logger.info("🚀 [PayNode-PY] x402 v2 detected. Handling autonomous payment...")
-                    if order_id: body['orderId'] = order_id
+                    if order_id and not body.get('orderId'): body['orderId'] = order_id
                     kwargs = self._handle_x402_v2(url, body, **kwargs)
                     continue
 
@@ -202,28 +202,61 @@ class PayNodeAgentClient:
             
             payload_data = {"txHash": tx_hash}
 
-        # Unified Payload for v3.1
+        # Official X402 V2 Payload with PayNode extensions
         payment_payload = {
-            "version": "3.1",
-            "type": ptype,
-            "orderId": order_id,
-            "payload": payload_data
+            "x402Version": 2,
+            "resource": requirements.get('resource'),
+            "accepted": {
+                "scheme": requirement.get('scheme'),
+                "network": requirement.get('network'),
+                "amount": requirement.get('amount'),
+                "asset": requirement.get('asset'),
+                "payTo": requirement.get('payTo'),
+                "maxTimeoutSeconds": requirement.get('maxTimeoutSeconds'),
+                "extra": requirement.get('extra', {})
+            },
+            "payload": payload_data,
+            "_paynode": {
+                "version": "2.2.0",
+                "type": ptype,
+                "orderId": order_id
+            }
         }
+        
+        # Add router for onchain
+        if ptype == 'onchain':
+            payment_payload["accepted"]["router"] = requirement.get('router')
 
         logger.info(f"✅ [PayNode-PY] {ptype} payment prepared. Retrying request...")
         
-        import json
-        import base64
         b64_payload = base64.b64encode(json.dumps(payment_payload).encode()).decode()
 
         retry_headers = kwargs.get('headers', {}).copy()
         retry_headers.update({
             'Content-Type': 'application/json',
-            'X-402-Payload': b64_payload,
+            'PAYMENT-SIGNATURE': b64_payload,
+            'X-402-Payload': b64_payload, # Backward compatibility
             'X-402-Order-Id': order_id
         })
         kwargs['headers'] = retry_headers
         return kwargs
+
+    def _request_with_settlement_check(self, method: str, url: str, **kwargs) -> requests.Response:
+        """Wrapper to check for PAYMENT-RESPONSE after retry."""
+        response = self.session.request(method, url, **kwargs)
+        
+        settle_header = response.headers.get('PAYMENT-RESPONSE') or response.headers.get('X-PAYMENT-RESPONSE')
+        if settle_header:
+            try:
+                settle_data = json.loads(base64.b64decode(settle_header).decode())
+                if settle_data.get('success'):
+                    logger.info(f"✅ [PayNode-PY] Settlement confirmed: {settle_data.get('transaction')}")
+                else:
+                    logger.warning(f"⚠️ [PayNode-PY] Settlement failed: {settle_data.get('errorReason', 'Unknown error')}")
+            except Exception as e:
+                logger.warning(f"⚠️ [PayNode-PY] Failed to parse settlement response: {e}")
+        
+        return response
 
     def sign_transfer_with_authorization(self, token_addr, to, amount, valid_after, valid_before, nonce, extra=None):
         extra = extra or {}

@@ -59,19 +59,51 @@ class PayNodeMiddleware(BaseHTTPMiddleware):
         self.max_timeout_seconds = kwargs.get('max_timeout_seconds', 3600)
 
     async def dispatch(self, request: Request, call_next):
-        v2_payload_header = request.headers.get('X-402-Payload')
+        v2_payload_header = request.headers.get('PAYMENT-SIGNATURE') or request.headers.get('X-402-Payload')
         order_id = request.headers.get('X-402-Order-Id')
 
         if not order_id:
-            order_id = self.generate_order_id(request)
+            order_id = (self.generate_order_id)(request)
 
         # Handle x402 v2 Unified Payload
         unified_payload = None
         if v2_payload_header:
             try:
-                unified_payload = json.loads(base64.b64decode(v2_payload_header.encode()).decode())
+                parsed = json.loads(base64.b64decode(v2_payload_header.encode()).decode())
+                
+                if parsed.get('x402Version') == 2 and parsed.get('accepted'):
+                    # Official X402 V2 format - convert to internal format
+                    internal_order_id = parsed.get('_paynode', {}).get('orderId') \
+                                     or order_id \
+                                     or f"auto_{int(time.time() * 1000)}"
+                    
+                    # Infer type from payload content if missing
+                    payload_content = parsed.get('payload', {})
+                    inferred_type = 'onchain'
+                    if payload_content.get('signature') or payload_content.get('authorization'):
+                        inferred_type = 'eip3009'
+                    elif payload_content.get('txHash'):
+                        inferred_type = 'onchain'
+                    
+                    p_type = parsed.get('_paynode', {}).get('type') or inferred_type
+                    
+                    unified_payload = {
+                        "version": "2.2.0",
+                        "type": p_type,
+                        "orderId": internal_order_id,
+                        "router": parsed.get('accepted', {}).get('router'),
+                        "payload": parsed.get('payload')
+                    }
+                    order_id = internal_order_id
+                elif parsed.get('version') == "2.2.0":
+                    # Legacy PayNode format
+                    unified_payload = parsed
+                    if 'orderId' in unified_payload:
+                        order_id = unified_payload['orderId']
+                    elif 'order_id' in unified_payload:
+                        order_id = unified_payload['order_id']
             except Exception as e:
-                logger.error(f"❌ [PayNode-Middleware] Failed to decode X-402-Payload header: {e}")
+                logger.error(f"❌ [PayNode-Middleware] Failed to decode payment payload header: {e}")
 
         if unified_payload:
             try:
@@ -91,14 +123,43 @@ class PayNodeMiddleware(BaseHTTPMiddleware):
                 )
                 if result.get("isValid"):
                     request.state.paynode = {"unified_payload": unified_payload, "orderId": order_id}
-                    return await call_next(request)
+                    
+                    # Construct settlement response header
+                    settle_response = {
+                        "success": True,
+                        "transaction": unified_payload.get("payload", {}).get("txHash") or "",
+                        "network": f"eip155:{self.chain_id}",
+                        "payer": result.get("payer", "")
+                    }
+                    b64_settle = base64.b64encode(json.dumps(settle_response).encode()).decode()
+                    
+                    response = await call_next(request)
+                    response.headers["PAYMENT-RESPONSE"] = b64_settle
+                    response.headers["X-PAYMENT-RESPONSE"] = b64_settle # Compatibility
+                    return response
                 else:
                     err = result.get("error")
+                    error_code = err.code if hasattr(err, 'code') else ErrorCode.invalid_receipt
+                    
+                    # Also include PAYMENT-RESPONSE header on failure for protocol symmetry
+                    settle_fail = {
+                        "success": False,
+                        "errorReason": error_code,
+                        "transaction": "",
+                        "network": f"eip155:{self.chain_id}"
+                    }
+                    b64_settle_fail = base64.b64encode(json.dumps(settle_fail).encode()).decode()
+                    
+                    headers = {
+                        "PAYMENT-RESPONSE": b64_settle_fail,
+                        "X-PAYMENT-RESPONSE": b64_settle_fail
+                    }
                     return JSONResponse(
                         status_code=403,
+                        headers=headers,
                         content={
                             "error": "Forbidden",
-                            "code": err.code if hasattr(err, 'code') else ErrorCode.invalid_receipt,
+                            "code": error_code,
                             "message": str(err)
                         }
                     )
@@ -144,6 +205,7 @@ class PayNodeMiddleware(BaseHTTPMiddleware):
         b64_required = base64.b64encode(json.dumps(v2_response).encode()).decode()
 
         headers = {
+            'PAYMENT-REQUIRED': b64_required,
             'X-402-Required': b64_required,
             'X-402-Order-Id': order_id,
         }

@@ -136,6 +136,7 @@ class PayNodeVerifier:
         order_id_bytes = self.w3.keccak(text=expected.get("orderId", ""))
 
         valid_log_found = False
+        found_payer = None
         order_id_mismatch_found = False
         for log in processed_logs:
             args = log.args
@@ -147,6 +148,7 @@ class PayNodeVerifier:
             if is_merchant_match and is_token_match and is_amount_match:
                 if is_order_match:
                     valid_log_found = True
+                    found_payer = args.get("payer")
                     break
                 else:
                     order_id_mismatch_found = True
@@ -161,7 +163,7 @@ class PayNodeVerifier:
             if not is_new:
                 return {"isValid": False, "error": PayNodeException(ErrorCode.duplicate_transaction)}
 
-        return {"isValid": True}
+        return {"isValid": True, "payer": found_payer}
 
     async def verify_transfer_with_authorization(
         self,
@@ -305,6 +307,6 @@ class PayNodeVerifier:
                 if self.store: await self.store.delete(nonce)
                 return {"isValid": False, "error": PayNodeException(ErrorCode.duplicate_transaction, message="Nonce already consumed on-chain")}
 
-            return {"isValid": True}
+            return {"isValid": True, "payer": auth["from"]}
         except Exception as e:
             return {"isValid": False, "error": PayNodeException(ErrorCode.internal_error, message=str(e))}
