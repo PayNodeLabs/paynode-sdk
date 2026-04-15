@@ -1,6 +1,7 @@
 import asyncio
 import time
 import logging
+import hmac
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from .errors import ErrorCode, PayNodeException
 from .constants import ACCEPTED_TOKENS, MIN_PAYMENT_AMOUNT, PAYNODE_ROUTER_ABI
@@ -146,10 +147,10 @@ class PayNodeVerifier:
         order_id_mismatch_found = False
         for log in processed_logs:
             args = log.args
-            is_merchant_match = args.get("merchant", "").lower() == merchant
-            is_token_match = args.get("token", "").lower() == token
+            is_merchant_match = hmac.compare_digest(args.get("merchant", "").lower(), merchant)
+            is_token_match = hmac.compare_digest(args.get("token", "").lower(), token)
             is_amount_match = args.get("amount", 0) >= amount
-            is_order_match = args.get("orderId") == order_id_bytes
+            is_order_match = hmac.compare_digest(args.get("orderId"), order_id_bytes)
 
             if is_merchant_match and is_token_match and is_amount_match:
                 if is_order_match:
@@ -191,7 +192,7 @@ class PayNodeVerifier:
             auth = payload["authorization"]
             
             # 1. Basic validation
-            if auth["to"].lower() != expected["to"].lower():
+            if not hmac.compare_digest(auth["to"].lower(), expected["to"].lower()):
                 return {"isValid": False, "error": PayNodeException(ErrorCode.invalid_receipt, message="Recipient mismatch")}
             
             payload_value = int(auth["value"])
@@ -252,7 +253,7 @@ class PayNodeVerifier:
             signable_msg = encode_typed_data(full_message=structured_data)
             recovered_address = Account.recover_message(signable_msg, signature=signature)
 
-            if recovered_address.lower() != auth["from"].lower():
+            if not hmac.compare_digest(recovered_address.lower(), auth["from"].lower()):
                 return {"isValid": False, "error": PayNodeException(ErrorCode.invalid_receipt, message="Invalid signature")}
 
             # 4. Idempotency (Nonce local check)

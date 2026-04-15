@@ -12,8 +12,13 @@ from .constants import (
     BASE_RPC_URLS, 
     PAYNODE_ROUTER_ADDRESS, 
     BASE_USDC_ADDRESS, 
-    BASE_USDC_DECIMALS
+    BASE_USDC_DECIMALS,
+    PROTOCOL_VERSION,
+    SDK_VERSION
 )
+from datetime import datetime, timezone
+from typing import Optional, Callable, Any, Dict
+from .utils.payload import PayNodePayloadHelper
 
 from starlette.middleware.base import BaseHTTPMiddleware
 
@@ -69,39 +74,8 @@ class PayNodeMiddleware(BaseHTTPMiddleware):
         unified_payload = None
         if v2_payload_header:
             try:
-                parsed = json.loads(base64.b64decode(v2_payload_header.encode()).decode())
-                
-                if parsed.get('x402Version') == 2 and parsed.get('accepted'):
-                    # Official X402 V2 format - convert to internal format
-                    internal_order_id = parsed.get('_paynode', {}).get('orderId') \
-                                     or order_id \
-                                     or f"auto_{int(time.time() * 1000)}"
-                    
-                    # Infer type from payload content if missing
-                    payload_content = parsed.get('payload', {})
-                    inferred_type = 'onchain'
-                    if payload_content.get('signature') or payload_content.get('authorization'):
-                        inferred_type = 'eip3009'
-                    elif payload_content.get('txHash'):
-                        inferred_type = 'onchain'
-                    
-                    p_type = parsed.get('_paynode', {}).get('type') or inferred_type
-                    
-                    unified_payload = {
-                        "version": "2.2.1",
-                        "type": p_type,
-                        "orderId": internal_order_id,
-                        "router": parsed.get('accepted', {}).get('router'),
-                        "payload": parsed.get('payload')
-                    }
-                    order_id = internal_order_id
-                elif isinstance(parsed.get('version'), str) and parsed.get('version').startswith(("2.3", "2.2")):
-                    # Legacy PayNode format
-                    unified_payload = parsed
-                    if 'orderId' in unified_payload:
-                        order_id = unified_payload['orderId']
-                    elif 'order_id' in unified_payload:
-                        order_id = unified_payload['order_id']
+                unified_payload = PayNodePayloadHelper.normalize(v2_payload_header, order_id)
+                order_id = unified_payload.get("orderId") or order_id
             except Exception as e:
                 logger.error(f"❌ [PayNode-Middleware] Failed to decode payment payload header: {e}")
 
@@ -170,6 +144,7 @@ class PayNodeMiddleware(BaseHTTPMiddleware):
         v2_response = {
             "x402Version": 2,
             "error": "Payment Required by PayNode",
+            "orderId": order_id,
             "resource": {
                 "url": str(request.url),
                 "description": self.description,
@@ -210,6 +185,119 @@ class PayNodeMiddleware(BaseHTTPMiddleware):
             'X-402-Order-Id': order_id,
         }
         return JSONResponse(status_code=402, headers=headers, content=v2_response)
+
+
+class PayNodeMerchantMiddleware(BaseHTTPMiddleware):
+    """
+    Unified PayNode Merchant Middleware
+    Handles: 
+    1. Market Proxy (Strict HMAC Signature + Body Unwrapping)
+    2. Discovery Probes (Auto-respond with API Manifest)
+    
+    Note: Standalone direct X402 payment flow should be handled 
+    via x402_gate.
+    """
+    def __init__(
+        self,
+        app: Any,
+        merchant: Any,  # PayNodeMerchant instance
+        merchant_address: str,
+        price: str,
+        manifest: Optional[Dict[str, Any]] = None,
+        **kwargs
+    ):
+        super().__init__(app)
+        self.merchant = merchant
+        self.merchant_address = merchant_address
+        self.price = price
+        self.manifest = manifest or {}
+        self.quiet = getattr(merchant, "quiet", False)
+
+    async def dispatch(self, request: Request, call_next):
+        # 1. Check for Market Proxy Headers
+        headers = request.headers
+        signature = headers.get("X-PayNode-Signature")
+        timestamp = headers.get("X-PayNode-Timestamp")
+        request_id = headers.get("X-PayNode-Request-Id") or headers.get("X-402-Order-Id")
+        is_discovery = headers.get("X-PayNode-Discovery") == "true"
+
+        if signature and request_id and timestamp:
+            # ✅ Verify Signature from PayNode Market
+            from .utils.signature import verify_market_signature
+            is_valid = verify_market_signature(
+                signature=signature,
+                order_id=request_id,
+                timestamp=timestamp,
+                shared_secret=self.merchant.shared_secret
+            )
+
+            if not is_valid:
+                if not self.quiet:
+                    logger.error(f"[PayNode-SDK] Invalid Market Proxy Signature for request {request_id}")
+                return JSONResponse(
+                    status_code=401,
+                    content={"error": "unauthorized", "message": "PayNode Market Signature verification failed."}
+                )
+
+            # --- Scene A: Discovery Probe ---
+            if is_discovery:
+                return JSONResponse(
+                    status_code=200,
+                    content={
+                        "status": "DISCOVERED",
+                        "x402Version": PROTOCOL_VERSION,
+                        "manifest": self.manifest,
+                        "last_synced": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+                    }
+                )
+
+            # --- Scene B: Proxy Flow - Context Enrichment ---
+            # In FastAPI, we store the unwrapped data in request.state
+            # Transparently unwrapping req.body is complex in BaseHTTPMiddleware, 
+            # so we provide the unwrapped body in request.state.paynode_body
+            
+            paynode_context = {"orderId": request_id}
+            
+            # Simple body check (may consume stream, so we use request.state to cache if needed)
+            # For now, we mirror JS context enrichment
+            try:
+                # We assume the Market Proxy always sends JSON
+                body = await request.json()
+                if isinstance(body, dict) and body.get("payload"):
+                    metadata = {k: v for k, v in body.items() if k != "payload"}
+                    
+                    request.state.paynode = {
+                        "orderId": request_id,
+                        "txHash": headers.get("X-PayNode-Transaction-Hash") or body.get("tx_hash"),
+                        "amount": headers.get("X-PayNode-Amount") or body.get("amount"),
+                        "network": headers.get("X-PayNode-Network") or body.get("network"),
+                        "chainId": headers.get("X-PayNode-Chain-Id") or (str(body.get("chain_id")) if body.get("chain_id") else None),
+                        "proxyMetadata": metadata
+                    }
+                    # Store the unwrapped body for the handler
+                    request.state.paynode_body = body.get("payload")
+                    
+                    # NOTE: To truly "unwrap" req.body for downstream handlers (so request.json() works),
+                    # we would need to override the request.receive channel. 
+                    # For this SDK, we recommend handlers check request.state.paynode_body if accessed via Proxy.
+                else:
+                    request.state.paynode = {"orderId": request_id}
+                    request.state.paynode_body = body
+            except Exception:
+                request.state.paynode = {"orderId": request_id}
+                request.state.paynode_body = None
+
+            return await call_next(request)
+
+        # 2. Scene C: Direct Agent Call (Rejected)
+        # PayNodeMerchant requires Market Proxy for verification.
+        return JSONResponse(
+            status_code=403,
+            content={
+                "error": "forbidden",
+                "message": "PayNode Market Auth required. This API must be accessed via PayNode Market Proxy for verification."
+            }
+        )
 
 def x402_gate(
     merchant_address: str, 

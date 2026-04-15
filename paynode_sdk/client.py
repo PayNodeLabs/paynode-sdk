@@ -10,14 +10,14 @@ from eth_account.messages import encode_typed_data
 from web3 import Web3
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
-from .constants import PAYNODE_ROUTER_ADDRESS, BASE_USDC_ADDRESS, BASE_USDC_DECIMALS, BASE_RPC_URLS, ACCEPTED_TOKENS, MIN_PAYMENT_AMOUNT, PAYNODE_ROUTER_ABI
+from .constants import PAYNODE_ROUTER_ADDRESS, BASE_USDC_ADDRESS, BASE_USDC_DECIMALS, BASE_RPC_URLS, ACCEPTED_TOKENS, MIN_PAYMENT_AMOUNT, PAYNODE_ROUTER_ABI, SDK_VERSION
 from .errors import PayNodeException, ErrorCode
 
 logger = logging.getLogger("paynode_sdk.client")
 
 class PayNodeAgentClient:
     """
-    The main PayNode Client for AI Agents (v2.2.1).
+    The main PayNode Client for AI Agents (v2.5.0).
     Automatically handles the x402 'Payment Required' handshake.
     Supports RPC redundancy, EIP-2612 Permit, and EIP-3009 Authorization.
     """
@@ -84,6 +84,12 @@ class PayNodeAgentClient:
 
     def request_gate(self, url: str, method: str = "GET", **kwargs):
         """The high-level autonomous method handling 402 loop."""
+        # Inject X-PayNode-Network header (mirrors JS SDK behavior)
+        chain_id = self.w3.eth.chain_id
+        paynode_network = 'mainnet' if chain_id == 8453 else 'testnet'
+        headers = kwargs.get('headers', {}).copy()
+        headers.setdefault('X-PayNode-Network', paynode_network)
+        kwargs['headers'] = headers
         return self._request_with_402_retry(method.upper(), url, **kwargs)
 
     def get(self, url, **kwargs):
@@ -216,6 +222,7 @@ class PayNodeAgentClient:
             "resource": requirements.get('resource'),
             "accepted": {
                 "scheme": requirement.get('scheme'),
+                "type": ptype,
                 "network": requirement.get('network'),
                 "amount": requirement.get('amount'),
                 "asset": requirement.get('asset'),
@@ -225,7 +232,7 @@ class PayNodeAgentClient:
             },
             "payload": payload_data,
             "_paynode": {
-                "version": "2.2.1",
+                "sdkVersion": SDK_VERSION,
                 "type": ptype,
                 "orderId": order_id
             }
@@ -239,12 +246,16 @@ class PayNodeAgentClient:
         
         b64_payload = base64.b64encode(json.dumps(payment_payload).encode()).decode()
 
+        chain_id = self.w3.eth.chain_id
+        paynode_network = 'mainnet' if chain_id == 8453 else 'testnet'
+
         retry_headers = kwargs.get('headers', {}).copy()
         retry_headers.update({
             'Content-Type': 'application/json',
             'PAYMENT-SIGNATURE': b64_payload,
             'X-402-Payload': b64_payload, # Backward compatibility
-            'X-402-Order-Id': order_id
+            'X-402-Order-Id': order_id,
+            'X-PayNode-Network': paynode_network
         })
         kwargs['headers'] = retry_headers
         return kwargs
