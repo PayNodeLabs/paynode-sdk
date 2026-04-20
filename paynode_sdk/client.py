@@ -10,14 +10,14 @@ from eth_account.messages import encode_typed_data
 from web3 import Web3
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
-from .constants import PAYNODE_ROUTER_ADDRESS, BASE_USDC_ADDRESS, BASE_USDC_DECIMALS, BASE_RPC_URLS, ACCEPTED_TOKENS, MIN_PAYMENT_AMOUNT, PAYNODE_ROUTER_ABI
+from .constants import PAYNODE_ROUTER_ADDRESS, BASE_USDC_ADDRESS, BASE_USDC_DECIMALS, BASE_RPC_URLS, ACCEPTED_TOKENS, MIN_PAYMENT_AMOUNT, PAYNODE_ROUTER_ABI, SDK_VERSION
 from .errors import PayNodeException, ErrorCode
 
 logger = logging.getLogger("paynode_sdk.client")
 
 class PayNodeAgentClient:
     """
-    The main PayNode Client for AI Agents (v2.2.1).
+    The main PayNode Client for AI Agents (v2.5.0).
     Automatically handles the x402 'Payment Required' handshake.
     Supports RPC redundancy, EIP-2612 Permit, and EIP-3009 Authorization.
     """
@@ -84,6 +84,12 @@ class PayNodeAgentClient:
 
     def request_gate(self, url: str, method: str = "GET", **kwargs):
         """The high-level autonomous method handling 402 loop."""
+        # Inject X-PayNode-Network header (mirrors JS SDK behavior)
+        chain_id = self.w3.eth.chain_id
+        paynode_network = 'mainnet' if chain_id == 8453 else 'testnet'
+        headers = kwargs.get('headers', {}).copy()
+        headers.setdefault('X-PayNode-Network', paynode_network)
+        kwargs['headers'] = headers
         return self._request_with_402_retry(method.upper(), url, **kwargs)
 
     def get(self, url, **kwargs):
@@ -159,15 +165,24 @@ class PayNodeAgentClient:
             raise PayNodeException(ErrorCode.token_not_accepted, message=f"Token {requirement['asset']} is not in the whitelist for chain {chain_id}")
 
         logger.info(f"💡 [PayNode-PY] Payment request (v2): {requirement['amount']} atomic units of {requirement['asset']} to {requirement['payTo']}")
-        
+        # --- Type Inference ---
+        ptype = requirement.get('type')
+        if not ptype:
+            extra = requirement.get('extra', {})
+            # x402 v2 'exact' scheme with extra metadata (name/version) is almost always EIP3009
+            if requirement.get('scheme') == 'exact' and extra.get('version'):
+                ptype = 'eip3009'
+            else:
+                ptype = 'onchain'
+
+        logger.info(f"💡 [PayNode-PY] Selected payment method: {ptype} on {requirement.get('network')}")
+
         # Dust limit check
         if int(requirement['amount']) < MIN_PAYMENT_AMOUNT:
             raise PayNodeException(ErrorCode.amount_too_low, message=f"Payment amount {requirement['amount']} is below the minimum dust limit of {MIN_PAYMENT_AMOUNT}")
 
         order_id = requirement.get('orderId') or requirements.get('orderId') or urlparse(url).path
-        
         payload_data = {}
-        ptype = requirement.get('type', 'onchain')
 
         if ptype == 'eip3009':
             valid_after = int(time.time()) - 60
@@ -215,6 +230,7 @@ class PayNodeAgentClient:
             "resource": requirements.get('resource'),
             "accepted": {
                 "scheme": requirement.get('scheme'),
+                "type": ptype,
                 "network": requirement.get('network'),
                 "amount": requirement.get('amount'),
                 "asset": requirement.get('asset'),
@@ -224,7 +240,7 @@ class PayNodeAgentClient:
             },
             "payload": payload_data,
             "_paynode": {
-                "version": "2.2.1",
+                "sdkVersion": SDK_VERSION,
                 "type": ptype,
                 "orderId": order_id
             }
@@ -238,12 +254,16 @@ class PayNodeAgentClient:
         
         b64_payload = base64.b64encode(json.dumps(payment_payload).encode()).decode()
 
+        chain_id = self.w3.eth.chain_id
+        paynode_network = 'mainnet' if chain_id == 8453 else 'testnet'
+
         retry_headers = kwargs.get('headers', {}).copy()
         retry_headers.update({
             'Content-Type': 'application/json',
             'PAYMENT-SIGNATURE': b64_payload,
             'X-402-Payload': b64_payload, # Backward compatibility
-            'X-402-Order-Id': order_id
+            'X-402-Order-Id': order_id,
+            'X-PayNode-Network': paynode_network
         })
         kwargs['headers'] = retry_headers
         return kwargs
@@ -382,7 +402,7 @@ class PayNodeAgentClient:
         sig = self.sign_permit(token_addr, router_addr, amount, version=version)
         router = self.w3.eth.contract(address=Web3.to_checksum_address(router_addr), abi=PAYNODE_ROUTER_ABI)
         order_id_bytes = self.w3.keccak(text=order_id)
-        current_gas_price = int(self.w3.eth.gas_price * 1.2)
+        current_gas_price = self.w3.eth.gas_price * 120 // 100
         with self.nonce_lock:
             nonce = self.w3.eth.get_transaction_count(self.account.address, 'pending')
             tx = router.functions.payWithPermit(self.account.address, Web3.to_checksum_address(token_addr), Web3.to_checksum_address(merchant_addr), amount, order_id_bytes, sig["deadline"], sig["v"], sig["r"], sig["s"]).build_transaction({'from': self.account.address, 'nonce': nonce, 'gas': 300000, 'gasPrice': current_gas_price})
@@ -397,7 +417,7 @@ class PayNodeAgentClient:
     def __pay_raw(self, router_addr, token_addr, merchant_addr, amount, order_id):
         router = self.w3.eth.contract(address=Web3.to_checksum_address(router_addr), abi=PAYNODE_ROUTER_ABI)
         order_id_bytes = self.w3.keccak(text=order_id)
-        current_gas_price = int(self.w3.eth.gas_price * 1.2)
+        current_gas_price = self.w3.eth.gas_price * 120 // 100
         with self.nonce_lock:
             nonce = self.w3.eth.get_transaction_count(self.account.address, 'pending')
             tx = router.functions.pay(Web3.to_checksum_address(token_addr), Web3.to_checksum_address(merchant_addr), amount, order_id_bytes).build_transaction({'from': self.account.address, 'nonce': nonce, 'gas': 200000, 'gasPrice': current_gas_price})
