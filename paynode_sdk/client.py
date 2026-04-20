@@ -165,16 +165,24 @@ class PayNodeAgentClient:
             raise PayNodeException(ErrorCode.token_not_accepted, message=f"Token {requirement['asset']} is not in the whitelist for chain {chain_id}")
 
         logger.info(f"💡 [PayNode-PY] Payment request (v2): {requirement['amount']} atomic units of {requirement['asset']} to {requirement['payTo']}")
-        logger.info(f"💡 [PayNode-PY] Selected payment method: {requirement.get('type', 'onchain')} on {requirement.get('network')}")
-        
+        # --- Type Inference ---
+        ptype = requirement.get('type')
+        if not ptype:
+            extra = requirement.get('extra', {})
+            # x402 v2 'exact' scheme with extra metadata (name/version) is almost always EIP3009
+            if requirement.get('scheme') == 'exact' and extra.get('version'):
+                ptype = 'eip3009'
+            else:
+                ptype = 'onchain'
+
+        logger.info(f"💡 [PayNode-PY] Selected payment method: {ptype} on {requirement.get('network')}")
+
         # Dust limit check
         if int(requirement['amount']) < MIN_PAYMENT_AMOUNT:
             raise PayNodeException(ErrorCode.amount_too_low, message=f"Payment amount {requirement['amount']} is below the minimum dust limit of {MIN_PAYMENT_AMOUNT}")
 
         order_id = requirement.get('orderId') or requirements.get('orderId') or urlparse(url).path
-        
         payload_data = {}
-        ptype = requirement.get('type', 'onchain')
 
         if ptype == 'eip3009':
             valid_after = int(time.time()) - 60
